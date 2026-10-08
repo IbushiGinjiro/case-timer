@@ -1,0 +1,8 @@
+build/
+dist/
+__pycache__/
+.pytest_cache/
+*.spec
+*.db
+release/
+assets/icon-preview.png

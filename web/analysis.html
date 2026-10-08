@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>case-timer 分析</title>
+<link rel="stylesheet" href="common.css">
+<script src="vendor/chart.umd.min.js"></script>
+<style>
+:root {
+  --case: #ffc21a; --case-hi: #ffe27a; --case-lo: #c98a00;
+  --ink: #1b1b1b; --paper: #fffbe8; --muted: #6b6656; --grid: #1b1b1b14;
+  --px: "Press Start 2P", monospace; --jp: "DotGothic16", sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; min-height: 100vh; font-family: var(--jp); color: var(--ink);
+  background: #23243a;
+  background-image: linear-gradient(#ffffff08 1px, transparent 1px), linear-gradient(90deg, #ffffff08 1px, transparent 1px);
+  background-size: 16px 16px; padding: 24px 16px;
+}
+.frame {
+  position: relative; max-width: 1120px; margin: 0 auto; padding: 18px 22px 22px;
+  background: var(--case); border: 4px solid var(--ink);
+  box-shadow: inset 6px 6px 0 var(--case-hi), inset -6px -6px 0 var(--case-lo), 8px 8px 0 #0008;
+}
+.screw { position: absolute; width: 10px; height: 10px; background: #888; border: 2px solid var(--ink); }
+.screw::after { content: ""; position: absolute; left: 1px; top: 2px; width: 4px; height: 2px; background: var(--ink); }
+.screw.tl { left: 10px; top: 10px; } .screw.tr { right: 10px; top: 10px; } .screw.bl { left: 10px; bottom: 10px; } .screw.br { right: 10px; bottom: 10px; }
+
+/* ===== 上部：タイトル・フィルタ（1行） ===== */
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 8px 14px; }
+.bar h1 { font-family: var(--px); font-size: 14px; margin: 0 12px 0 0; }
+.ctl, .bar select, .bar button {
+  font-family: var(--jp); font-size: 15px; padding: 5px 10px; background: var(--paper); color: var(--ink);
+  border: 3px solid var(--ink); border-radius: 0; box-shadow: inset 3px 3px 0 #0002; cursor: pointer;
+}
+.bar button:active { transform: translateY(2px); }
+.bar button:disabled { opacity: .35; cursor: default; }
+.period { font-family: var(--jp); font-size: 15px; min-width: 190px; text-align: center; background: var(--ink); color: var(--case); padding: 7px 10px; }
+.spacer { flex: 1; }
+.tabs { display: flex; gap: 0; }
+.tabs button { box-shadow: none; }
+.tabs button.on { background: var(--ink); color: var(--case); }
+
+/* ===== グラフ ===== */
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.card { position: relative; background: var(--paper); border: 4px solid var(--ink); box-shadow: 4px 4px 0 #0005; cursor: pointer; }
+.card.selected { outline: 4px solid #fff; outline-offset: -10px; }
+.card header { display: flex; justify-content: space-between; align-items: center; gap: 8px; background: var(--ink); color: var(--paper); padding: 6px 10px; }
+.card header b { font-size: 15px; font-weight: normal; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card header span { font-family: var(--px); font-size: 7px; color: var(--case); white-space: nowrap; }
+.card .body { position: relative; height: 240px; padding: 10px 12px 6px; }
+.card .empty { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: var(--muted); font-size: 15px; pointer-events: none; }
+.card.is-empty .empty { display: flex; }
+
+/* ===== リスト ===== */
+.list { margin-top: 14px; background: var(--paper); border: 4px solid var(--ink); box-shadow: 4px 4px 0 #0005; }
+.list header { background: var(--ink); color: var(--paper); padding: 6px 10px; font-size: 15px; display: flex; justify-content: space-between; }
+table { width: 100%; border-collapse: collapse; font-size: 15px; }
+th, td { padding: 6px 10px; border-bottom: 2px solid #1b1b1b18; text-align: left; vertical-align: middle; }
+th { font-weight: normal; color: var(--muted); font-size: 13px; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.prj { cursor: pointer; }
+tr.prj:hover { background: #1b1b1b0a; }
+tr.task td:first-child { padding-left: 34px; color: #333; }
+tr.total td { border-top: 3px solid var(--ink); }
+.chip { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--ink); margin-right: 8px; vertical-align: -1px; }
+.meter { height: 10px; background: #1b1b1b14; position: relative; min-width: 80px; }
+.meter i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--ink); }
+.arc { color: var(--muted); font-size: 12px; margin-left: 6px; }
+
+/* ===== 選択パネル ===== */
+.panel {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(360px, 100vw); background: var(--paper);
+  border-left: 4px solid var(--ink); box-shadow: -8px 0 0 #0006; padding: 16px; overflow: auto;
+  transform: translateX(110%); transition: transform .18s steps(4); z-index: 20;
+}
+.panel.show { transform: none; }
+.panel h2 { font-family: var(--px); font-size: 10px; margin: 0 0 12px; }
+.panel .row { display: flex; gap: 6px; align-items: center; margin-bottom: 10px; }
+.panel select, .panel button { font-family: var(--jp); font-size: 14px; padding: 4px 8px; border: 3px solid var(--ink); background: #fff; border-radius: 0; cursor: pointer; }
+.panel label.cb { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-bottom: 2px solid #1b1b1b14; cursor: pointer; font-size: 15px; }
+.panel label.cb input { width: 18px; height: 18px; accent-color: var(--ink); }
+.panel label.cb small { color: var(--muted); margin-left: auto; }
+.panel .picked { font-size: 13px; color: var(--muted); margin: 10px 0; line-height: 1.7; }
+.panel .close { width: 100%; margin-top: 14px; background: var(--case); font-family: var(--px); font-size: 9px; padding: 8px; }
+
+/* ===== 記録一覧 ===== */
+.records td input, .records td select { font-family: var(--jp); font-size: 14px; padding: 2px 4px; border: 2px solid var(--ink); background: #fff; border-radius: 0; max-width: 150px; }
+.records button { font-family: var(--jp); font-size: 13px; padding: 2px 8px; border: 2px solid var(--ink); background: #fff; border-radius: 0; cursor: pointer; }
+.records .note { padding: 8px 10px; color: var(--muted); font-size: 13px; }
+.hidden { display: none !important; }
+
+@media (max-width: 1000px) { .grid { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 760px) { .grid { grid-template-columns: 1fr; } .period { min-width: 0; } }
+</style>
+</head>
+<body>
+<div class="frame">
+  <i class="screw tl"></i><i class="screw tr"></i><i class="screw bl"></i><i class="screw br"></i>
+
+  <div class="bar">
+    <h1>ANALYSIS</h1>
+    <select id="range" aria-label="表示範囲">
+      <option value="week">週</option><option value="month" selected>月</option><option value="m3">3か月</option>
+      <option value="m6">半年</option><option value="year">年</option><option value="all">これまでの累積</option>
+    </select>
+    <button id="prev" aria-label="前の期間">◀</button>
+    <div class="period" id="period"></div>
+    <button id="next" aria-label="次の期間">▶</button>
+    <div class="spacer"></div>
+    <div class="tabs"><button id="tabGraph" class="on">グラフ</button><button id="tabRec">記録</button></div>
+    <button id="csv">CSV出力</button>
+  </div>
+
+  <div id="viewGraph">
+    <div class="grid">
+      <div class="card" data-chart="0"><header><b id="t0"></b><span>CLICK TO SELECT</span></header><div class="body"><canvas id="c0"></canvas><div class="empty">この期間の記録はありません</div></div></div>
+      <div class="card" data-chart="1"><header><b id="t1"></b><span>CLICK TO SELECT</span></header><div class="body"><canvas id="c1"></canvas><div class="empty">この期間の記録はありません</div></div></div>
+      <div class="card" data-chart="2"><header><b id="t2"></b><span>CLICK TO SELECT</span></header><div class="body"><canvas id="c2"></canvas><div class="empty">この期間の記録はありません</div></div></div>
+    </div>
+    <div class="list">
+      <header><span>プロジェクト別・タスク別の合計（行をクリックでタスクを開閉）</span><span id="listSum"></span></header>
+      <table><thead><tr><th>プロジェクト / タスク</th><th class="num">合計時間</th><th class="num">割合</th><th style="width:30%"></th></tr></thead><tbody id="listBody"></tbody></table>
+    </div>
+  </div>
+
+  <div id="viewRec" class="list records hidden">
+    <header><span>記録一覧（この期間・新しい順）</span><button id="addRec">＋ 手動で追加</button></header>
+    <table><thead><tr><th>日付</th><th>開始</th><th>終了</th><th>プロジェクト</th><th>タスク</th><th class="num">時間</th><th></th></tr></thead><tbody id="recBody"></tbody></table>
+    <div class="note" id="recNote"></div>
+  </div>
+</div>
+
+<aside class="panel" id="panel"></aside>
+
+<script>
+// ================= データ（Python側のSQLiteから取得） =================
+// 色は検証済みの参照パレット（クリーム背景#fffbe8でCVD・明度チェック通過）を固定順で割り当てる
+const PALETTE = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"];
+const OTHER_COLOR = "#9a9482";
+const api = () => window.pywebview.api;
+let projects = [], tasks = [], records = [];
+let today = new Date();
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const parseTs = s => { const [d, t] = s.split(" "); const [y, m, dd] = d.split("-").map(Number); const [h, mi, se] = t.split(":").map(Number); return new Date(y, m - 1, dd, h, mi, se); };
+const pad = n => String(n).padStart(2, "0");
+const ts = (day, min) => { const d = new Date(day.getTime() + Math.round(min * 60) * 1000); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
+
+function loadData(data) {
+  today = new Date(); today.setHours(0, 0, 0, 0);
+  projects = data.projects.map(p => ({ id: p.id, name: p.name, archived: p.done, color: OTHER_COLOR, taskIds: p.tasks.map(t => t.id), tasks: p.tasks.map(t => t.name) }));
+  tasks = [];
+  data.projects.forEach(p => p.tasks.forEach((t, i) => tasks.push({ id: t.id, prj: p.id, name: t.name, idx: i % PALETTE.length, done: t.done })));
+  // 記録は日付で区切って保存されているので、開始日の0時からの分で持つ（0時ちょうどに終わる区間は1440分）
+  records = data.records.map(r => {
+    const s = parseTs(r.start_at), e = parseTs(r.end_at), day = new Date(s); day.setHours(0, 0, 0, 0);
+    return { id: r.id, date: day, start: (s - day) / 60000, end: (e - day) / 60000, task: r.task_id };
+  }).filter(r => T(r.task));
+}
+async function reloadData() { loadData(await api().analysis_data()); render(); }
+window.reloadData = reloadData;
+const P = id => projects.find(p => p.id === id), T = id => tasks.find(t => t.id === id);
+const mins = r => r.end - r.start;
+const prjOf = r => T(r.task).prj;
+
+// ================= 期間 =================
+const state = { range: "month", offset: 0, sel: [null, null, null], panelFor: null, expanded: new Set(), editing: null };
+const fmtD = d => `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`;
+const fmtHM = m => { const t = Math.round(m); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`; };
+const hm = m => { const t = Math.floor(m); return `${String(Math.floor(t / 60) % 24).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`; };
+const monday = d => addDays(d, -((d.getDay() + 6) % 7));
+const monthStart = (y, m) => new Date(y, m, 1);
+
+function bounds() {
+  const r = state.range, o = state.offset;
+  if (r === "week") { const s = addDays(monday(today), o * 7); return { s, e: addDays(s, 7), bucket: "day", label: `${fmtD(s)}〜${fmtD(addDays(s, 6)).slice(5)}` }; }
+  if (r === "all") { const first = records.reduce((a, x) => x.date < a ? x.date : a, new Date(today)); return { s: monthStart(first.getFullYear(), first.getMonth()), e: addDays(today, 1), bucket: "month", label: `${fmtD(first).slice(0, 7)}〜（全期間）` }; }
+  const n = { month: 1, m3: 3, m6: 6, year: 12 }[r];
+  const endM = monthStart(today.getFullYear(), today.getMonth() + 1 + o * n);
+  const s = monthStart(endM.getFullYear(), endM.getMonth() - n);
+  const lastM = monthStart(endM.getFullYear(), endM.getMonth() - 1);
+  const ym = d => `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}`;
+  return { s, e: endM, bucket: { month: "day", m3: "week", m6: "week", year: "month" }[r], label: n === 1 ? `${s.getFullYear()}年${s.getMonth() + 1}月` : `${ym(s)}〜${ym(lastM)}` };
+}
+function bucketKeys(b) {
+  const keys = [];
+  if (b.bucket === "day") for (let d = new Date(b.s); d < b.e; d = addDays(d, 1)) keys.push(new Date(d));
+  if (b.bucket === "week") for (let d = monday(b.s); d < b.e; d = addDays(d, 7)) keys.push(new Date(d));
+  if (b.bucket === "month") for (let d = new Date(b.s); d < b.e; d = monthStart(d.getFullYear(), d.getMonth() + 1)) keys.push(new Date(d));
+  return keys;
+}
+const bucketOf = (b, d) => b.bucket === "day" ? +d : b.bucket === "week" ? +monday(d) : +monthStart(d.getFullYear(), d.getMonth());
+const bucketLabel = (b, d) => b.bucket === "month" ? `${String(d.getFullYear()).slice(2)}/${d.getMonth() + 1}` : `${d.getMonth() + 1}/${d.getDate()}`;
+const inRange = b => records.filter(r => r.date >= b.s && r.date < b.e);
+
+// ================= 既定の表示対象 =================
+// その期間で稼働の多い順にプロジェクトを並べる（円グラフは全部、折れ線は上位2つ）
+function projectTotals(recs) {
+  const sum = {};
+  recs.forEach(r => { const p = prjOf(r); sum[p] = (sum[p] || 0) + mins(r); });
+  return Object.keys(sum).map(Number).sort((a, b) => sum[b] - sum[a]).map(id => ({ id, min: sum[id] }));
+}
+function topTasks(pid, recs) {
+  const sum = {};
+  recs.forEach(r => { if (prjOf(r) === pid) sum[r.task] = (sum[r.task] || 0) + mins(r); });
+  const ids = Object.keys(sum).map(Number).sort((a, b) => sum[b] - sum[a]).slice(0, 3);
+  return ids.length ? ids : P(pid).taskIds.slice(0, 3);
+}
+const MAX_PIE = 8; // 色を固定順で割り当てられる上限。超えた分は「その他」にまとめる
+function assignColors(recs) {
+  projects.forEach(p => p.color = OTHER_COLOR);
+  projectTotals(recs).forEach((x, i) => { if (i < MAX_PIE - 1) P(x.id).color = PALETTE[i]; });
+}
+function pieTargets(recs) {
+  const totals = projectTotals(recs);
+  return state.sel[0] ? totals.filter(x => state.sel[0].includes(x.id)) : totals;
+}
+function lineTarget(i, recs) {
+  const s = state.sel[i], pid = s?.prj ?? projectTotals(recs)[i - 1]?.id;
+  return { pid, ids: pid ? (s?.tasks ?? topTasks(pid, recs)) : [] };
+}
+
+// ================= グラフ =================
+Chart.defaults.font.family = "DotGothic16, sans-serif";
+Chart.defaults.font.size = 13;
+Chart.defaults.color = "#4a4636";
+const charts = [];
+const tip = { backgroundColor: "#1b1b1b", titleColor: "#ffc21a", bodyColor: "#fffbe8", cornerRadius: 0, padding: 10, borderColor: "#1b1b1b", boxPadding: 4 };
+
+function makeCharts() {
+  charts[0] = new Chart(document.getElementById("c0"), {
+    type: "pie",
+    data: { labels: [], datasets: [{ data: [], backgroundColor: [], borderColor: "#fffbe8", borderWidth: 2, hoverOffset: 6 }] },
+    options: {
+      maintainAspectRatio: false, animation: { duration: 250 },
+      plugins: {
+        legend: { position: "bottom", labels: { usePointStyle: true, pointStyle: "rect", padding: 10 } },
+        tooltip: { ...tip, callbacks: { label: c => { const tot = c.dataset.data.reduce((a, x) => a + x, 0); return ` ${fmtHM(c.raw)}（${Math.round(c.raw / tot * 100)}%）`; } } },
+      },
+    },
+  });
+  for (let i = 1; i <= 2; i++) charts[i] = new Chart(document.getElementById("c" + i), {
+    type: "line",
+    data: { labels: [], datasets: [] },
+    options: {
+      maintainAspectRatio: false, animation: { duration: 250 },
+      interaction: { mode: "index", intersect: false },
+      scales: {
+        x: { grid: { display: false }, border: { color: "#1b1b1b" }, ticks: { maxRotation: 0, autoSkipPadding: 12 } },
+        y: { beginAtZero: true, grid: { color: "#1b1b1b14" }, border: { display: false }, title: { display: true, text: "時間(h)" }, ticks: { precision: 0 } },
+      },
+      plugins: {
+        legend: { position: "bottom", labels: { usePointStyle: true, pointStyle: "rect", padding: 12 } },
+        tooltip: { ...tip, callbacks: { label: c => ` ${c.dataset.label}  ${fmtHM(c.raw * 60)}` } },
+      },
+    },
+  });
+}
+
+function render() {
+  const b = bounds(), recs = inRange(b);
+  document.getElementById("period").textContent = b.label;
+  document.getElementById("prev").disabled = state.range === "all";
+  document.getElementById("next").disabled = state.range === "all" || state.offset >= 0;
+
+  assignColors(recs);
+  // 円グラフ：その期間のプロジェクト（多い順）
+  let slices = pieTargets(recs).map(x => ({ label: P(x.id).name, min: x.min, color: P(x.id).color }));
+  if (slices.length > MAX_PIE) {
+    const rest = slices.slice(MAX_PIE - 1).reduce((a, x) => a + x.min, 0);
+    slices = slices.slice(0, MAX_PIE - 1).concat({ label: "その他", min: rest, color: OTHER_COLOR });
+  }
+  const pie = charts[0];
+  pie.data.labels = slices.map(x => x.label);
+  pie.data.datasets[0].data = slices.map(x => x.min);
+  pie.data.datasets[0].backgroundColor = slices.map(x => x.color);
+  pie.update();
+  document.getElementById("t0").textContent = state.sel[0] ? "プロジェクトの割合（選択中）" : "プロジェクトの割合";
+  setEmpty(0, !slices.some(x => x.min));
+
+  // 折れ線：1グラフ＝1プロジェクト。タスクの刻みごとの時間
+  const keys = bucketKeys(b);
+  for (let i = 1; i <= 2; i++) {
+    const { pid, ids } = lineTarget(i, recs);
+    const ch = charts[i];
+    ch.data.labels = keys.map(k => bucketLabel(b, k));
+    ch.data.datasets = ids.map(id => {
+      const t = T(id), m = new Map(keys.map(k => [+k, 0]));
+      recs.forEach(r => { if (r.task === id) { const k = bucketOf(b, r.date); if (m.has(k)) m.set(k, m.get(k) + mins(r)); } });
+      return {
+        label: t.name,
+        data: [...m.entries()].map(([k, v]) => k > +today ? null : +(v / 60).toFixed(2)), // 未来の刻みは描かない
+        borderColor: PALETTE[t.idx], backgroundColor: PALETTE[t.idx], borderWidth: 2, tension: 0,
+        pointStyle: "rect", pointRadius: keys.length > 40 ? 0 : 4, pointHoverRadius: 6,
+        pointBorderColor: "#fffbe8", pointBorderWidth: 2,
+      };
+    });
+    ch.update();
+    document.getElementById("t" + i).textContent = pid ? `${P(pid).name} のタスク` : "（記録なし）";
+    setEmpty(i, ch.data.datasets.every(d => d.data.every(v => !v)));
+  }
+  renderList(recs);
+  if (!document.getElementById("viewRec").classList.contains("hidden")) renderRecords();
+  if (state.panelFor !== null) renderPanel();
+}
+const setEmpty = (i, on) => document.querySelector(`.card[data-chart="${i}"]`).classList.toggle("is-empty", on);
+
+// ================= リスト =================
+function renderList(recs) {
+  const total = recs.reduce((a, r) => a + mins(r), 0);
+  const byP = {}, byT = {};
+  recs.forEach(r => { const p = prjOf(r); byP[p] = (byP[p] || 0) + mins(r); byT[r.task] = (byT[r.task] || 0) + mins(r); });
+  const pct = m => total ? Math.round(m / total * 100) : 0;
+  const rows = Object.keys(byP).map(Number).sort((a, b) => byP[b] - byP[a]).map(pid => {
+    const p = P(pid), open = state.expanded.has(pid);
+    let h = `<tr class="prj" data-pid="${pid}"><td>${open ? "▼" : "▶"} <span class="chip" style="background:${p.color}"></span>${p.name}${p.archived ? '<span class="arc">完了</span>' : ""}</td><td class="num">${fmtHM(byP[pid])}</td><td class="num">${pct(byP[pid])}%</td><td><div class="meter"><i style="width:${pct(byP[pid])}%"></i></div></td></tr>`;
+    if (open) h += p.taskIds.filter(t => byT[t]).sort((a, b) => byT[b] - byT[a]).map(t =>
+      `<tr class="task"><td>${T(t).name}</td><td class="num">${fmtHM(byT[t])}</td><td class="num">${pct(byT[t])}%</td><td><div class="meter"><i style="width:${pct(byT[t])}%;opacity:.45"></i></div></td></tr>`).join("");
+    return h;
+  }).join("");
+  document.getElementById("listBody").innerHTML = (rows || '<tr><td colspan="4" style="color:#6b6656">この期間の記録はありません</td></tr>') +
+    `<tr class="total"><td>合計</td><td class="num">${fmtHM(total)}</td><td class="num">100%</td><td></td></tr>`;
+  document.getElementById("listSum").textContent = `${recs.length}件`;
+}
+document.getElementById("listBody").onclick = e => {
+  const tr = e.target.closest("tr.prj"); if (!tr) return;
+  const id = +tr.dataset.pid; state.expanded.has(id) ? state.expanded.delete(id) : state.expanded.add(id); render();
+};
+
+// ================= 選択パネル（チェックボックス） =================
+document.querySelectorAll(".card").forEach(c => c.onclick = () => { state.panelFor = +c.dataset.chart; renderPanel(); });
+function renderPanel() {
+  const i = state.panelFor, panel = document.getElementById("panel"), recs = inRange(bounds());
+  document.querySelectorAll(".card").forEach(c => c.classList.toggle("selected", +c.dataset.chart === i));
+  let h;
+  if (i === 0) {
+    const ids = pieTargets(recs).map(x => x.id), sel = state.sel[0] ?? ids;
+    h = `<h2>PIE: プロジェクト</h2>` + projects.map(p =>
+      `<label class="cb"><input type="checkbox" data-id="${p.id}" ${sel.includes(p.id) ? "checked" : ""}><span class="chip" style="background:${p.color}"></span>${p.name}${p.archived ? "<small>完了</small>" : ""}</label>`).join("");
+  } else {
+    const { pid, ids } = lineTarget(i, recs);
+    h = `<h2>LINE ${i}: タスク</h2>
+      <div class="row">プロジェクト：<select id="pf">${projects.map(p => `<option value="${p.id}" ${p.id === pid ? "selected" : ""}>${p.name}${p.archived ? "（完了）" : ""}</option>`).join("")}</select></div>` +
+      (pid ? P(pid).taskIds.map(id => { const t = T(id);
+        return `<label class="cb"><input type="checkbox" data-id="${id}" ${ids.includes(id) ? "checked" : ""}><span class="chip" style="background:${PALETTE[t.idx]}"></span>${t.name}</label>`; }).join("") : "");
+  }
+  h += `<div class="row"><button id="reset">既定に戻す</button></div><button class="close" id="pclose">CLOSE</button>`;
+  panel.innerHTML = h;
+  panel.classList.add("show");
+  panel.querySelectorAll("input[type=checkbox]").forEach(cb => cb.onchange = () => {
+    const checked = [...panel.querySelectorAll("input[type=checkbox]:checked")].map(x => +x.dataset.id);
+    if (i === 0) state.sel[0] = checked;
+    else state.sel[i] = { prj: lineTarget(i, recs).pid, tasks: checked };
+    render();
+  });
+  const pf = document.getElementById("pf");
+  if (pf) pf.onchange = () => { state.sel[i] = { prj: +pf.value, tasks: null }; render(); };
+  document.getElementById("reset").onclick = () => { state.sel[i] = null; render(); };
+  document.getElementById("pclose").onclick = closePanel;
+}
+function closePanel() { state.panelFor = null; document.getElementById("panel").classList.remove("show"); document.querySelectorAll(".card").forEach(c => c.classList.remove("selected")); }
+document.addEventListener("keydown", e => { if (e.key === "Escape") closePanel(); });
+
+// ================= 記録一覧（修正・手動追加） =================
+const prjOptions = sel => projects.filter(p => !p.archived || p.id === sel).map(p => `<option value="${p.id}" ${p.id === sel ? "selected" : ""}>${p.name}</option>`).join("");
+const taskOptions = (pid, sel) => P(pid).tasks.map((n, i) => { const id = P(pid).taskIds[i]; return `<option value="${id}" ${id === sel ? "selected" : ""}>${n}</option>`; }).join("");
+const toMin = v => { const [h, m] = v.split(":").map(Number); return h * 60 + m; };
+function renderRecords() {
+  const b = bounds(), list = inRange(b).sort((x, y) => y.date - x.date || y.start - x.start);
+  const shown = list.slice(0, 100);
+  document.getElementById("recBody").innerHTML = shown.map(r => {
+    const t = T(r.task);
+    if (state.editing === r.id) {
+      return `<tr data-id="${r.id}"><td><input type="date" id="eD" value="${fmtD(r.date).replaceAll("/", "-")}"></td><td><input type="time" id="eS" value="${hm(r.start)}"></td><td><input type="time" id="eE" value="${hm(r.end)}"></td>
+        <td><select id="eP">${prjOptions(t.prj)}</select></td><td><select id="eT">${taskOptions(t.prj, r.task)}</select></td><td class="num"></td>
+        <td><button data-act="save">保存</button> <button data-act="cancel">取消</button></td></tr>`;
+    }
+    return `<tr data-id="${r.id}"><td>${fmtD(r.date)}</td><td>${hm(r.start)}</td><td>${hm(r.end)}</td><td><span class="chip" style="background:${P(t.prj).color}"></span>${P(t.prj).name}</td><td>${t.name}</td><td class="num">${fmtHM(mins(r))}</td>
+      <td><button data-act="edit">修正</button> <button data-act="del">削除</button></td></tr>`;
+  }).join("") || '<tr><td colspan="7" style="color:#6b6656">この期間の記録はありません</td></tr>';
+  document.getElementById("recNote").textContent = list.length > 100 ? `全${list.length}件のうち新しい100件を表示（それより前は表示範囲を変えてください）` : `${list.length}件`;
+  const eP = document.getElementById("eP");
+  if (eP) eP.onchange = () => { document.getElementById("eT").innerHTML = taskOptions(+eP.value); };
+}
+document.getElementById("recBody").onclick = async e => {
+  const btn = e.target.closest("button"); if (!btn) return;
+  const id = +btn.closest("tr").dataset.id, r = records.find(x => x.id === id), act = btn.dataset.act;
+  if (act === "edit") state.editing = id;
+  if (act === "cancel") { if (r.isNew) records = records.filter(x => x !== r); state.editing = null; }
+  if (act === "del") {
+    // 誤操作防止：1回目はボタンの表示を変えるだけ、2回目で削除
+    if (btn.dataset.confirm !== "1") { btn.dataset.confirm = "1"; btn.textContent = "本当に削除"; return; }
+    loadData(await api().delete_record(id));
+  }
+  if (act === "save") {
+    const s = toMin(document.getElementById("eS").value);
+    let en = toMin(document.getElementById("eE").value);
+    if (en === 0) en = 1440; // 終了 00:00 はその日の終わり（翌日0時）とみなす
+    if (!(en > s)) { document.getElementById("eE").style.background = "#ffd0d0"; return; }
+    const [y, m, d] = document.getElementById("eD").value.split("-").map(Number);
+    const day = new Date(y, m - 1, d), task = +document.getElementById("eT").value;
+    const data = r.isNew ? await api().add_record(task, ts(day, s), ts(day, en)) : await api().update_record(id, task, ts(day, s), ts(day, en));
+    state.editing = null;
+    loadData(data);
+  }
+  render();
+};
+document.getElementById("addRec").onclick = () => {
+  const first = tasks.find(t => !t.done && !P(t.prj).archived);
+  if (!first) return;
+  const r = { id: -Date.now(), date: new Date(today), start: 9 * 60, end: 10 * 60, task: first.id, isNew: true };
+  records.push(r); state.editing = r.id; if (state.range !== "all") state.offset = 0; render();
+};
+
+// ================= 操作 =================
+document.getElementById("range").onchange = e => { state.range = e.target.value; state.offset = 0; render(); };
+document.getElementById("prev").onclick = () => { state.offset--; render(); };
+document.getElementById("next").onclick = () => { state.offset++; render(); };
+function tab(rec) {
+  document.getElementById("viewGraph").classList.toggle("hidden", rec);
+  document.getElementById("viewRec").classList.toggle("hidden", !rec);
+  document.getElementById("tabGraph").classList.toggle("on", !rec);
+  document.getElementById("tabRec").classList.toggle("on", rec);
+  closePanel(); render();
+}
+document.getElementById("tabGraph").onclick = () => tab(false);
+document.getElementById("tabRec").onclick = () => tab(true);
+document.getElementById("csv").onclick = async () => {
+  const b = bounds();
+  const rows = [["日付", "開始", "終了", "プロジェクト", "タスク", "時間(分)"]].concat(
+    inRange(b).sort((x, y) => x.date - y.date || x.start - y.start).map(r => { const t = T(r.task); return [fmtD(r.date), hm(r.start), hm(r.end), P(t.prj).name, t.name, Math.round(mins(r))]; }));
+  const csv = rows.map(r => r.map(v => `"${String(v).replaceAll('"', '""')}"`).join(",")).join("\r\n");
+  await api().save_csv(`作業時間_${b.label.replace(/[\/〜（）\s]/g, "_")}.csv`, csv);
+};
+
+// メイン画面で計測した記録を拾うため、分析画面に戻ってきたら読み直す（編集中は除く）
+window.addEventListener("focus", () => { if (window.pywebview?.api && state.editing === null && charts.length) reloadData(); });
+window.addEventListener("pywebviewready", async () => { await document.fonts.ready; makeCharts(); await reloadData(); });
+</script>
+</body>
+</html>
