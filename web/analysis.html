@@ -90,6 +90,16 @@ tr.total td { border-top: 3px solid var(--ink); }
 .records td input, .records td select { font-family: var(--jp); font-size: 14px; padding: 2px 4px; border: 2px solid var(--ink); background: #fff; border-radius: 0; max-width: 150px; }
 .records button { font-family: var(--jp); font-size: 13px; padding: 2px 8px; border: 2px solid var(--ink); background: #fff; border-radius: 0; cursor: pointer; }
 .records .note { padding: 8px 10px; color: var(--muted); font-size: 13px; }
+/* ===== リザルト ===== */
+.result header { align-items: center; }
+.resnav { display: flex; align-items: center; gap: 6px; }
+.resnav b { font-weight: normal; min-width: 130px; text-align: center; color: var(--case); }
+.resnav button { font-family: var(--jp); font-size: 13px; padding: 2px 8px; border: 2px solid var(--paper); background: var(--ink); color: var(--paper); border-radius: 0; cursor: pointer; }
+.resnav button:disabled { opacity: .35; cursor: default; }
+.result th.num { width: 16%; }
+.result td.num { font-size: 17px; }
+.result tr.prj { cursor: default; background: #1b1b1b0a; }
+.result tr.prj:hover { background: #1b1b1b0a; }
 .hidden { display: none !important; }
 
 @media (max-width: 1000px) { .grid { grid-template-columns: 1fr 1fr; } }
@@ -110,7 +120,7 @@ tr.total td { border-top: 3px solid var(--ink); }
     <div class="period" id="period"></div>
     <button id="next" aria-label="次の期間">▶</button>
     <div class="spacer"></div>
-    <div class="tabs"><button id="tabGraph" class="on">グラフ</button><button id="tabRec">記録</button></div>
+    <div class="tabs"><button id="tabGraph" class="on">グラフ</button><button id="tabRes">リザルト</button><button id="tabRec">記録</button></div>
     <button id="csv">CSV出力</button>
   </div>
 
@@ -126,6 +136,10 @@ tr.total td { border-top: 3px solid var(--ink); }
     </div>
   </div>
 
+  <div id="viewRes" class="list result hidden">
+    <header><span>リザルト（時間・小数2桁）</span><span class="resnav"><button id="resPrev" aria-label="前の日">◀</button><b id="resDay"></b><button id="resNext" aria-label="次の日">▶</button><button id="resToday">今日</button><button id="resCopy">コピー</button></span></header>
+    <table><thead><tr><th>プロジェクト / タスク</th><th class="num" id="hDay"></th><th class="num" id="hWeek"></th><th class="num" id="hMonth"></th></tr></thead><tbody id="resBody"></tbody></table>
+  </div>
   <div id="viewRec" class="list records hidden">
     <header><span>記録一覧（この期間・新しい順）</span><button id="addRec">＋ 手動で追加</button></header>
     <table><thead><tr><th>日付</th><th>開始</th><th>終了</th><th>プロジェクト</th><th>タスク</th><th class="num">時間</th><th></th></tr></thead><tbody id="recBody"></tbody></table>
@@ -166,7 +180,7 @@ const mins = r => r.end - r.start;
 const prjOf = r => T(r.task).prj;
 
 // ================= 期間 =================
-const state = { range: "month", offset: 0, sel: [null, null, null], panelFor: null, expanded: new Set(), editing: null };
+const state = { range: "month", offset: 0, sel: [null, null, null], panelFor: null, expanded: new Set(), editing: null, resDay: null }; // resDay: null＝今日
 const fmtD = d => `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`;
 const fmtHM = m => { const t = Math.round(m); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`; };
 const hm = m => { const t = Math.floor(m); return `${String(Math.floor(t / 60) % 24).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`; };
@@ -303,6 +317,7 @@ function render() {
   }
   renderList(recs);
   if (!document.getElementById("viewRec").classList.contains("hidden")) renderRecords();
+  if (!document.getElementById("viewRes").classList.contains("hidden")) renderResult();
   if (state.panelFor !== null) renderPanel();
 }
 const setEmpty = (i, on) => document.querySelector(`.card[data-chart="${i}"]`).classList.toggle("is-empty", on);
@@ -414,19 +429,73 @@ document.getElementById("addRec").onclick = () => {
   records.push(r); state.editing = r.id; if (state.range !== "all") state.offset = 0; render();
 };
 
+// ================= リザルト（基準日の日・週・月の合計） =================
+const WD = "日月火水木金土";
+const hours = m => m ? (m / 60).toFixed(2) : ""; // 0は空欄にして、見るべき数字だけ目に入るようにする
+function resultCols() {
+  const d = state.resDay ?? today, w = monday(d), ms = monthStart(d.getFullYear(), d.getMonth());
+  return [
+    { s: d, e: addDays(d, 1), label: `${d.getMonth() + 1}/${d.getDate()}(${WD[d.getDay()]})` },
+    { s: w, e: addDays(w, 7), label: `週 ${w.getMonth() + 1}/${w.getDate()}〜${addDays(w, 6).getMonth() + 1}/${addDays(w, 6).getDate()}` },
+    { s: ms, e: monthStart(d.getFullYear(), d.getMonth() + 1), label: `${d.getFullYear()}年${d.getMonth() + 1}月` },
+  ];
+}
+// 週は月をまたぐことがあるので、どれか1列でも時間があるタスクを出す。並びは月→週→日の多い順
+function resultData() {
+  const cols = resultCols(), byT = {};
+  cols.forEach((c, i) => records.forEach(r => { if (r.date >= c.s && r.date < c.e) (byT[r.task] ??= [0, 0, 0])[i] += mins(r); }));
+  const order = (a, b) => b[2] - a[2] || b[1] - a[1] || b[0] - a[0];
+  const byP = {};
+  Object.keys(byT).map(Number).forEach(id => { const p = T(id).prj; (byP[p] ??= { sum: [0, 0, 0], tasks: [] }).tasks.push(id); byT[id].forEach((m, i) => byP[p].sum[i] += m); });
+  const groups = Object.keys(byP).map(Number).sort((a, b) => order(byP[a].sum, byP[b].sum))
+    .map(pid => ({ pid, sum: byP[pid].sum, tasks: byP[pid].tasks.sort((a, b) => order(byT[a], byT[b])).map(id => ({ id, sum: byT[id] })) }));
+  const total = [0, 1, 2].map(i => groups.reduce((a, g) => a + g.sum[i], 0));
+  return { cols, groups, total };
+}
+function renderResult() {
+  const { cols, groups, total } = resultData();
+  document.getElementById("resDay").textContent = cols[0].label;
+  ["hDay", "hWeek", "hMonth"].forEach((id, i) => document.getElementById(id).textContent = cols[i].label);
+  document.getElementById("resNext").disabled = !state.resDay || state.resDay >= today;
+  const nums = s => s.map(m => `<td class="num">${hours(m)}</td>`).join("");
+  document.getElementById("resBody").innerHTML = groups.map(g => `<tr class="prj"><td>${P(g.pid).name}${P(g.pid).archived ? '<span class="arc">完了</span>' : ""}</td>${nums(g.sum)}</tr>` +
+    g.tasks.map(t => `<tr class="task"><td>${T(t.id).name}</td>${nums(t.sum)}</tr>`).join("")).join("") +
+    (groups.length ? "" : '<tr><td colspan="4" style="color:#6b6656">この月の記録はありません</td></tr>') +
+    `<tr class="total"><td>合計</td>${nums(total)}</tr>`;
+}
+const moveResDay = n => { const d = addDays(state.resDay ?? today, n); state.resDay = d >= today ? null : d; renderResult(); };
+document.getElementById("resPrev").onclick = () => moveResDay(-1);
+document.getElementById("resNext").onclick = () => moveResDay(1);
+document.getElementById("resToday").onclick = () => { state.resDay = null; renderResult(); };
+// Excelや勤怠入力に貼れるよう、タブ区切りでコピーする（プロジェクトの小計行つき）
+document.getElementById("resCopy").onclick = async e => {
+  const { cols, groups, total } = resultData(), btn = e.currentTarget;
+  const rows = [["プロジェクト", "タスク", ...cols.map(c => c.label)]];
+  groups.forEach(g => {
+    rows.push([P(g.pid).name, "（小計）", ...g.sum.map(hours)]);
+    g.tasks.forEach(t => rows.push([P(g.pid).name, T(t.id).name, ...t.sum.map(hours)]));
+  });
+  rows.push(["合計", "", ...total.map(hours)]);
+  const ok = await api().copy_text(rows.map(r => r.join("\t")).join("\r\n") + "\r\n");
+  btn.textContent = ok ? "コピーしました" : "コピー失敗";
+  setTimeout(() => btn.textContent = "コピー", 1500);
+};
 // ================= 操作 =================
 document.getElementById("range").onchange = e => { state.range = e.target.value; state.offset = 0; render(); };
 document.getElementById("prev").onclick = () => { state.offset--; render(); };
 document.getElementById("next").onclick = () => { state.offset++; render(); };
-function tab(rec) {
-  document.getElementById("viewGraph").classList.toggle("hidden", rec);
-  document.getElementById("viewRec").classList.toggle("hidden", !rec);
-  document.getElementById("tabGraph").classList.toggle("on", !rec);
-  document.getElementById("tabRec").classList.toggle("on", rec);
+function tab(name) {
+  ["Graph", "Res", "Rec"].forEach(n => {
+    document.getElementById("view" + n).classList.toggle("hidden", n !== name);
+    document.getElementById("tab" + n).classList.toggle("on", n === name);
+  });
+  // リザルトは基準日で動くので、上部の表示範囲・期間・CSV出力は隠す
+  ["range", "prev", "period", "next", "csv"].forEach(id => document.getElementById(id).classList.toggle("hidden", name === "Res"));
   closePanel(); render();
 }
-document.getElementById("tabGraph").onclick = () => tab(false);
-document.getElementById("tabRec").onclick = () => tab(true);
+document.getElementById("tabGraph").onclick = () => tab("Graph");
+document.getElementById("tabRes").onclick = () => tab("Res");
+document.getElementById("tabRec").onclick = () => tab("Rec");
 document.getElementById("csv").onclick = async () => {
   const b = bounds();
   const rows = [["日付", "開始", "終了", "プロジェクト", "タスク", "時間(分)"]].concat(

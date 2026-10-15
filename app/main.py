@@ -46,6 +46,29 @@ class MONITORINFO(ctypes.Structure):
     _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", RECT), ("rcWork", RECT), ("dwFlags", ctypes.c_ulong)]
 
 
+def set_clipboard(text: str) -> bool:
+    """クリップボードに文字列を入れる（Excelに貼れるようタブ区切りの表を渡す想定）。"""
+    k32, u32 = ctypes.windll.kernel32, ctypes.windll.user32
+    k32.GlobalAlloc.restype = ctypes.c_void_p
+    k32.GlobalLock.restype = ctypes.c_void_p
+    k32.GlobalLock.argtypes = k32.GlobalUnlock.argtypes = k32.GlobalFree.argtypes = [ctypes.c_void_p]
+    u32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+    data = text.encode("utf-16-le") + b"\0\0"
+    if not u32.OpenClipboard(None):
+        return False
+    try:
+        u32.EmptyClipboard()
+        h = k32.GlobalAlloc(0x0002, len(data))  # GMEM_MOVEABLE
+        ctypes.memmove(k32.GlobalLock(h), data, len(data))
+        k32.GlobalUnlock(h)
+        if not u32.SetClipboardData(13, h):  # CF_UNICODETEXT
+            k32.GlobalFree(h)
+            return False
+        return True
+    finally:
+        u32.CloseClipboard()
+
+
 def resize_keep_bottom_left(title: str, w: int, h: int) -> bool:
     """左下の位置を変えずにウィンドウの大きさを変える（ミニモードの切替で位置がずれないように）。
 
@@ -451,6 +474,9 @@ class Api:
         path = picked[0] if isinstance(picked, (list, tuple)) else picked
         Path(path).write_text(text, encoding="utf-8-sig")
         return str(path)
+
+    def copy_text(self, text):
+        return set_clipboard(text)
 
 
 def main():
