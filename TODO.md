@@ -63,4 +63,4 @@
 - [x] 集計ロジックの確認（ダミーデータでの手計算と一致。月をまたぐ週 9/28〜10/4 も確認）
 - [x] exe・インストーラーを作り直す（`release/case-timer-setup-1.1.0.exe`）
 - [x] 作者環境に 1.1.0 を入れる（2026-10-15、上書きインストール。自動起動の登録はそのまま）
-- [ ] コミット・GitHub Release v1.1.0（ユーザー確認後） ← 次
+- [x] コミット・GitHub Release v1.1.0（2026-10-15、https://github.com/IbushiGinjiro/case-timer/releases/tag/v1.1.0）
