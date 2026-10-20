@@ -1,6 +1,6 @@
 ﻿; case-timer のインストーラー（Inno Setup 6）。build.py から ISCC で作る
 #define AppName "case-timer"
-#define AppVersion "1.1.0"
+#define AppVersion "1.2.0"
 #define AppExe "case-timer.exe"
 
 [Setup]

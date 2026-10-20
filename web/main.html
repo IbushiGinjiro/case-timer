@@ -419,7 +419,7 @@ function quitApp() {
 // 「カタめの動き」：引く方向も下げる方向も、あそび（わずかなガタつき）→ 止まる → 一気に入る、の3段階
 const crown = $("crown"), hint = $("hint");
 const PULL = 34, PULL_PLAY_PX = 6, PULL_PLAY_LEN = 3, PULL_GATE = 28, PULL_BACK = 16;
-const PLAY_PX = 8, PLAY_DEG = 3, GATE = 46, BACK = 30, SHIFT_DEG = 38;
+const PLAY_PX = 8, PLAY_DEG = 1, GATE = 46, BACK = 30, SHIFT_DEG = 38;
 let drag = null;
 function setArm(len, deg) { crown.style.setProperty("--len", len + "px"); crown.style.setProperty("--deg", deg + "deg"); }
 function snap(cls, len, deg, shakeCls, ms) {

@@ -2,6 +2,8 @@
 
 記録（records）は「連続して作業していた区間」1つにつき1行。一時停止・切替・日付またぎ・
 休憩の除外はすべて区間を区切ることで表現する（分析では区間の長さを足すだけでよい）。
+手入力で「何時間」だけを入れた記録は no_time=1 とし、その日の0:00から作業時間ぶんの区間として持つ
+（時刻は画面・CSVで「--:--」と表示する）。
 """
 import json
 import sqlite3
@@ -32,7 +34,8 @@ CREATE TABLE IF NOT EXISTS records (
   task_id INTEGER NOT NULL REFERENCES tasks(id),
   start_at TEXT NOT NULL,
   end_at TEXT NOT NULL,
-  note TEXT NOT NULL DEFAULT ''
+  note TEXT NOT NULL DEFAULT '',
+  no_time INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_records_start ON records(start_at);
 CREATE TABLE IF NOT EXISTS kv (
@@ -74,6 +77,10 @@ class Store:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(SCHEMA)
+            # v1.1以前のDBには no_time 列が無いので足す（v1.1のアプリはこの列を無視して読めるので、戻しても壊れない）
+            cols = [r[1] for r in self._conn.execute("PRAGMA table_info(records)")]
+            if "no_time" not in cols:
+                self._conn.execute("ALTER TABLE records ADD COLUMN no_time INTEGER NOT NULL DEFAULT 0")
             self._conn.commit()
 
     def close(self):
@@ -162,20 +169,40 @@ class Store:
         return rows[0] if rows else None
 
     # ---------- 記録 ----------
-    def add_record(self, task_id: int, start: datetime, end: datetime) -> int:
+    def add_record(self, task_id: int, start: datetime, end: datetime, no_time: bool = False) -> int:
         if end <= start:
             raise ValueError("終了が開始より前です")
-        return self._exec("INSERT INTO records(task_id, start_at, end_at) VALUES(?, ?, ?)",
-                          (task_id, fmt(start), fmt(end))).lastrowid
+        return self._exec("INSERT INTO records(task_id, start_at, end_at, no_time) VALUES(?, ?, ?, ?)",
+                          (task_id, fmt(start), fmt(end), int(no_time))).lastrowid
 
-    def update_record(self, record_id: int, task_id: int, start: datetime, end: datetime):
+    def update_record(self, record_id: int, task_id: int, start: datetime, end: datetime, no_time: bool = False):
         if end <= start:
             raise ValueError("終了が開始より前です")
-        self._exec("UPDATE records SET task_id = ?, start_at = ?, end_at = ? WHERE id = ?",
-                   (task_id, fmt(start), fmt(end), record_id))
+        self._exec("UPDATE records SET task_id = ?, start_at = ?, end_at = ?, no_time = ? WHERE id = ?",
+                   (task_id, fmt(start), fmt(end), int(no_time), record_id))
+
+    def cut_records(self, task_id: int, start: datetime, end: datetime) -> float:
+        """そのタスクの記録から start〜end の区間を取り除く（はみ出た部分は残す）。取り除いた秒数を返す。
+
+        時刻なしの手入力（no_time）は実際の時刻を表していないので対象にしない。
+        """
+        removed = 0.0
+        for r in self._all("SELECT id, start_at, end_at FROM records WHERE task_id = ? AND no_time = 0 AND start_at < ? AND end_at > ?",
+                           (task_id, fmt(end), fmt(start))):
+            rs, re_ = parse(r["start_at"]), parse(r["end_at"])
+            removed += (min(re_, end) - max(rs, start)).total_seconds()
+            if rs < start:
+                self._exec("UPDATE records SET end_at = ? WHERE id = ?", (fmt(start), r["id"]))
+                if re_ > end:
+                    self.add_record(task_id, end, re_)
+            elif re_ > end:
+                self._exec("UPDATE records SET start_at = ? WHERE id = ?", (fmt(end), r["id"]))
+            else:
+                self.delete_record(r["id"])
+        return removed
 
     def delete_record(self, record_id: int):
         self._exec("DELETE FROM records WHERE id = ?", (record_id,))
 
     def list_records(self) -> list:
-        return self._all("SELECT id, task_id, start_at, end_at FROM records ORDER BY start_at")
+        return self._all("SELECT id, task_id, start_at, end_at, no_time FROM records ORDER BY start_at")

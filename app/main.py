@@ -94,6 +94,32 @@ def resize_keep_bottom_left(title: str, w: int, h: int) -> bool:
     return bool(user32.SetWindowPos(hwnd, None, x, y, pw, ph, SWP_NOZORDER | SWP_NOACTIVATE))
 
 
+def move_to_monitor_of(title: str, ref_title: str, always: bool) -> bool:
+    """ウィンドウ title を、ref_title があるモニターの作業領域の中央に移す。
+
+    always=False のときは、すでに同じモニターにあれば動かさない。作業領域より大きい場合は収まる大きさに縮める。
+    """
+    user32 = ctypes.windll.user32
+    hwnd, ref = user32.FindWindowW(None, title), user32.FindWindowW(None, ref_title)
+    if not hwnd or not ref:
+        return False
+    mon = user32.MonitorFromWindow(ref, 2)
+    if not always and user32.MonitorFromWindow(hwnd, 2) == mon:
+        return False
+    mi = MONITORINFO()
+    mi.cbSize = ctypes.sizeof(mi)
+    if not user32.GetMonitorInfoW(mon, ctypes.byref(mi)):
+        return False
+    work, r = mi.rcWork, RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(r))
+    w = min(r.right - r.left, work.right - work.left)
+    h = min(r.bottom - r.top, work.bottom - work.top)
+    x = work.left + (work.right - work.left - w) // 2
+    y = work.top + (work.bottom - work.top - h) // 2
+    SWP_NOZORDER = 0x0004
+    return bool(user32.SetWindowPos(hwnd, None, x, y, w, h, SWP_NOZORDER))
+
+
 class App:
     MAIN_TITLE = "case-timer"
     ANALYSIS_TITLE = "case-timer 分析"
@@ -242,6 +268,7 @@ class App:
         if self.analysis:
             try:
                 self.analysis.restore()
+                move_to_monitor_of(self.ANALYSIS_TITLE, self.MAIN_TITLE, always=False)
                 self.analysis.show()
                 self.analysis.evaluate_js("window.reloadData && reloadData()")
                 return
@@ -249,8 +276,9 @@ class App:
                 self.analysis = None
         self.analysis = webview.create_window(
             self.ANALYSIS_TITLE, url=str(paths.WEB_DIR / "analysis.html"), js_api=self.api,
-            width=1180, height=880, min_size=(720, 500), background_color=BG)
+            width=1180, height=880, min_size=(1160, 640), background_color=BG)
         self.analysis.events.closed += lambda: setattr(self, "analysis", None)
+        self.analysis.events.shown += lambda: move_to_monitor_of(self.ANALYSIS_TITLE, self.MAIN_TITLE, always=True)
 
     def set_mini(self, on: bool):
         self.mini = on
@@ -453,12 +481,12 @@ class Api:
         s = self._app.store
         return {"projects": s.list_projects(), "records": s.list_records(), "today": date.today().isoformat()}
 
-    def add_record(self, task_id, start, end):
-        self._app.store.add_record(int(task_id), parse(start), parse(end))
+    def add_record(self, task_id, start, end, no_time=False):
+        self._app.store.add_record(int(task_id), parse(start), parse(end), bool(no_time))
         return self.analysis_data()
 
-    def update_record(self, record_id, task_id, start, end):
-        self._app.store.update_record(int(record_id), int(task_id), parse(start), parse(end))
+    def update_record(self, record_id, task_id, start, end, no_time=False):
+        self._app.store.update_record(int(record_id), int(task_id), parse(start), parse(end), bool(no_time))
         return self.analysis_data()
 
     def delete_record(self, record_id):
@@ -477,6 +505,16 @@ class Api:
 
     def copy_text(self, text):
         return set_clipboard(text)
+
+    # 分析画面の表示の好み（リザルトの DAY/WEEK/MONTH/ALL など）。pywebview はブラウザの保存領域を残さないので kv に置く
+    def get_pref(self, key, default=None):
+        return (self._app.store.get("ui_prefs") or {}).get(key, default)
+
+    def set_pref(self, key, value):
+        prefs = self._app.store.get("ui_prefs") or {}
+        prefs[key] = value
+        self._app.store.set("ui_prefs", prefs)
+        return True
 
 
 def main():

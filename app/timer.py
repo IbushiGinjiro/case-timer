@@ -123,12 +123,18 @@ class Timer:
             return changed
 
     def exclude_idle(self, idle_start: datetime, idle_end: datetime):
-        """無操作だった区間を作業時間から除く。計測中のときだけ有効。"""
+        """無操作だった区間を作業時間から除く。計測中のときだけ有効。
+
+        スリープ明けは、確認より先に日付またぎの区切りで休憩中の分が記録済みになっていることがあるので、
+        記録済みの分からも取り除く。
+        """
         with self._lock:
             if self.status != RUNNING or self.seg_start is None or idle_end <= idle_start:
                 return False
             if self.seg_start < idle_start:
                 self._close_segment(idle_start)
+            removed = self.store.cut_records(self.task_id, _trunc(idle_start), _trunc(idle_end))
+            self.acc = max(0.0, self.acc - removed)
             self.seg_start = max(idle_end, self.seg_start or idle_end)
             self._save()
             return True

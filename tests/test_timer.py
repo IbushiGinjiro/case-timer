@@ -130,6 +130,33 @@ def test_exclude_idle(env):
     assert spans(store) == [(a1, "09:00", "12:00"), (a1, "13:05", "14:00")]
 
 
+def test_exclude_idle_after_weekend_sleep(env):
+    # 金曜に計測中のままスリープ → 月曜に復帰。確認より先に日付またぎの区切りが走っても、除外で金〜日の分が消える
+    store, timer, clock, a1, a2 = env
+    clock.t = datetime(2026, 10, 9, 13, 0)
+    timer.press_start(a1)
+    clock.t = datetime(2026, 10, 9, 13, 30)
+    timer.tick()
+    clock.t = datetime(2026, 10, 12, 9, 0)
+    assert timer.tick() is True  # 10/9〜10/11 の分が記録済みになる
+    assert timer.exclude_idle(datetime(2026, 10, 9, 13, 30), datetime(2026, 10, 12, 8, 55))
+    assert timer.snapshot()["elapsed"] == (30 + 5) * 60
+    clock.t = datetime(2026, 10, 12, 10, 0)
+    timer.stop()
+    assert [(r["start_at"], r["end_at"]) for r in store.list_records()] == [
+        ("2026-10-09 13:00:00", "2026-10-09 13:30:00"),
+        ("2026-10-12 08:55:00", "2026-10-12 10:00:00"),
+    ]
+
+
+def test_cut_records_keeps_other_tasks_and_edges(env):
+    store, timer, clock, a1, a2 = env
+    store.add_record(a1, datetime(2026, 10, 8, 9, 0), datetime(2026, 10, 8, 12, 0))
+    store.add_record(a2, datetime(2026, 10, 8, 10, 0), datetime(2026, 10, 8, 11, 0))
+    assert store.cut_records(a1, datetime(2026, 10, 8, 10, 0), datetime(2026, 10, 8, 11, 0)) == 3600
+    assert sorted(spans(store)) == sorted([(a1, "09:00", "10:00"), (a1, "11:00", "12:00"), (a2, "10:00", "11:00")])
+
+
 def test_exclude_idle_ignored_when_not_running(env):
     store, timer, clock, a1, a2 = env
     assert not timer.exclude_idle(datetime(2026, 10, 8, 8, 0), datetime(2026, 10, 8, 8, 30))

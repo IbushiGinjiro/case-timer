@@ -1,0 +1,662 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>case-timer 分析（v1.2 部品モック）</title>
+<link rel="stylesheet" href="../web/common.css">
+<style>
+:root {
+  --case: #ffc21a; --case-hi: #ffe27a; --case-lo: #c98a00;
+  --ink: #1b1b1b; --paper: #fffbe8; --muted: #6b6656;
+  --orange: #ff8a1e; --orange-lo: #c45a00; --turq: #2bb5a8; --red: #e8322c; --red-lo: #8e1410;
+  --cream: #fff4d6; --chrome-hi: #ffffff; --chrome: #cfd3d8; --chrome-lo: #7d838c;
+  --px: "Press Start 2P", monospace; --jp: "DotGothic16", sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; min-height: 100vh; font-family: var(--jp); color: var(--ink); background: #23243a;
+  background-image: linear-gradient(#ffffff08 1px, transparent 1px), linear-gradient(90deg, #ffffff08 1px, transparent 1px);
+  background-size: 16px 16px; padding: 24px 16px; user-select: none;
+}
+.frame {
+  position: relative; max-width: 1120px; margin: 22px auto 0; padding: 14px 22px 22px;
+  background: var(--case); border: 4px solid var(--ink);
+  box-shadow: inset 6px 6px 0 var(--case-hi), inset -6px -6px 0 var(--case-lo), 8px 8px 0 #0008;
+}
+.frame.thud { animation: thud .14s steps(3) 1; }
+.frame.click { animation: click .1s steps(2) 1; }
+@keyframes thud { 33% { transform: translateY(3px); } 66% { transform: translateY(-1px); } }
+@keyframes click { 50% { transform: translateX(1px); } }
+.screw { position: absolute; width: 10px; height: 10px; background: #888; border: 2px solid var(--ink); }
+.screw::after { content: ""; position: absolute; left: 1px; top: 2px; width: 4px; height: 2px; background: var(--ink); }
+.screw.tl { left: 10px; top: 10px; } .screw.tr { right: 10px; top: 10px; } .screw.bl { left: 10px; bottom: 10px; } .screw.br { right: 10px; bottom: 10px; }
+
+/* ===== 上部の帯：タイトル・画面切替レバー・期間の移動（共通）／画面ごとの部品／CSV・COPY（右端） ===== */
+/* 共通の部品（画面切替レバー、◀ 期間 ▶、右端のボタン）は、どの画面でも同じ位置に置く */
+.band { display: flex; align-items: center; gap: 16px; height: 176px; margin: 0 8px 12px; }
+.band .left { display: grid; grid-template-columns: auto auto; grid-template-rows: 84px 76px; column-gap: 24px; align-items: center; }
+.band h1 { font-family: var(--px); font-size: 27px; margin: 0; text-shadow: 3px 3px 0 var(--case-lo); letter-spacing: 1px; }
+.band .nav { grid-column: 1 / 3; display: flex; align-items: center; gap: 14px; }
+.band .slot { display: grid; grid-template-rows: 84px 76px; align-items: center; }
+.band .slot .span2 { grid-row: 1 / 3; }
+.band .slot .row2 { grid-row: 2; justify-self: end; }
+.band .right { width: 152px; display: flex; justify-content: center; margin-left: auto; }
+.band [data-for].off { display: none; }
+.band .nav > [data-for].off { display: inline-block; visibility: hidden; }
+.mocklabel { position: absolute; right: 30px; top: -22px; font-size: 12px; color: #cfd0e6; }
+
+/* 8bitの丸：JSで clip-path に階段状の円を入れる（.pc は正方形・4の倍数の大きさ） */
+.pc { position: absolute; display: block; }
+
+/* ===== A：切替レバー（トースターの白いレバーを横にした形） ===== */
+.lever { position: relative; width: var(--w); height: 80px; touch-action: none; }
+.lever .labels { position: absolute; left: 0; right: 0; top: 0; height: 22px; }
+.lever .labels span { position: absolute; top: 0; transform: translateX(-50%); font-size: 15px; line-height: 20px; padding: 0 8px; cursor: pointer; white-space: nowrap; color: #5a4300; }
+.lever .slot { position: absolute; left: 0; right: 0; top: 46px; height: 12px; background: #111; box-shadow: inset 0 4px 0 #000, 0 3px 0 var(--case-hi), 0 -3px 0 var(--case-lo); }
+.lever .knob {
+  position: absolute; top: 18px; left: 0; width: 60px; height: 56px; margin-left: -30px; cursor: grab;
+  background: #f4f0e6; border: 4px solid var(--ink);
+  box-shadow: inset 5px 5px 0 #ffffff, inset -5px -5px 0 #c9c1b0, 0 5px 0 var(--ink);
+}
+.lever .knob::before { content: ""; position: absolute; left: 14px; right: 14px; top: 14px; bottom: 14px;
+  background: repeating-linear-gradient(90deg, #a79f8e 0 4px, transparent 4px 8px); }
+.lever.en .labels span { font-family: var(--px); font-size: 9px; }
+.lever .knob.snap { transition: left .17s cubic-bezier(.3, 1.7, .55, 1); }
+.lever .knob:active { cursor: grabbing; }
+
+/* ===== 画面ごとの操作段（高さを固定して、下の内容が上下にずれないように） ===== */
+.ctl { display: flex; align-items: center; gap: 16px; margin: 0 8px 12px; height: 172px; padding: 0 6px; }
+.ctl .spacer { flex: 1; }
+.period { font-size: 16px; min-width: 210px; text-align: center; background: var(--lcd-bg); color: var(--lcd-on); text-shadow: 0 0 6px #7dff6b88;
+  padding: 8px 10px; border: 4px solid var(--ink); box-shadow: inset 4px 4px 0 #000a; }
+.part { display: flex; flex-direction: column; align-items: center; }
+
+/* ===== B：ジュークボックスボタン（本体のSTART/STOPと同じ8bitの押しボタン。押すたびに奥のランプが光る） ===== */
+/* 色はターコイズ（2026-10-20 決定）。消えているときは本体のSTART/STOPの消灯時と同じくらいの暗さ */
+:root { --jb: #17625e; --jb-hi: #2a827c; --jb-lo: #0b3f3c; --jb-text: #04221f; --jb-lamp: #2fd3c6; --jb-lamp-mid: #b8fff6; --jb-lamp-hi: #8ff3e9; --jb-lamp-lo: #0f8a80; }
+.jb {
+  position: relative; min-width: 64px; height: 50px; padding: 0 14px; font-family: var(--jp); font-size: 18px; color: var(--jb-text);
+  border: 4px solid var(--ink); border-radius: 0; cursor: pointer; outline: none; background: var(--jb);
+  box-shadow: inset 6px 6px 0 var(--jb-hi), inset -6px -6px 0 var(--jb-lo), 0 6px 0 var(--ink); transition: transform .04s;
+}
+.jb.en { font-family: var(--px); font-size: 10px; }
+.jb::before { /* 奥のランプ：中心が白く、まわりがボタンの色 */
+  content: ""; position: absolute; inset: 0; pointer-events: none; opacity: 0;
+  background: radial-gradient(closest-side, #ffffff 0 45%, var(--jb-lamp-mid) 45% 75%, var(--jb-lamp) 75%);
+  box-shadow: inset 6px 6px 0 var(--jb-lamp-hi), inset -6px -6px 0 var(--jb-lamp-lo);
+}
+.jb span { position: relative; }
+.jb:active, .jb.down { transform: translateY(5px); box-shadow: inset 6px 6px 0 var(--jb-hi), inset -6px -6px 0 var(--jb-lo), 0 1px 0 var(--ink); }
+.jb.flash::before { animation: lamp .8s steps(4) 1; }
+.jb.flash span { animation: lampText .8s steps(4) 1; }
+@keyframes lamp { 0%, 30% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes lampText { 0%, 30% { color: var(--ink); } }
+.jb.small { height: 34px; min-width: 52px; font-size: 14px; padding: 0 10px; border-width: 3px;
+  box-shadow: inset 3px 3px 0 var(--jb-hi), inset -3px -3px 0 var(--jb-lo), 0 4px 0 var(--ink); }
+.jb.small:active { transform: translateY(3px); box-shadow: inset 3px 3px 0 var(--jb-hi), inset -3px -3px 0 var(--jb-lo), 0 1px 0 var(--ink); }
+.jb.small::before { box-shadow: inset 3px 3px 0 var(--jb-lamp-hi), inset -3px -3px 0 var(--jb-lamp-lo); }
+
+/* ===== C：赤い丸の押しボタン（真上から見た形。金属の座金の穴に赤いボタンが収まっている） ===== */
+/* 押すとボタンがひと回り小さく暗くなり、穴の黒い縁が太く見える（奥へ沈んだ見え方） */
+.big { position: relative; width: 152px; height: 152px; cursor: pointer; }
+.big .b0 { left: 0; top: 0; width: 152px; height: 152px; background: var(--ink); }
+.big .b1 { left: 4px; top: 4px; width: 144px; height: 144px; background: #5f646b; }
+.big .b2 { left: 4px; top: 4px; width: 140px; height: 140px; background: #e4e7ea; }
+.big .b3 { left: 8px; top: 8px; width: 136px; height: 136px; background: #aab0b8; }
+.big .b4 { left: 16px; top: 16px; width: 120px; height: 120px; background: var(--ink); }
+.big .c0 { left: 20px; top: 20px; width: 112px; height: 112px; background: var(--red-lo); }
+.big .c1 { left: 20px; top: 20px; width: 108px; height: 108px; background: var(--red); }
+.big .c2 { left: 32px; top: 32px; width: 88px; height: 88px; background: #f04a40; }
+.big .c3 { left: 44px; top: 44px; width: 60px; height: 60px; background: #f6584e; }
+.big .hl { position: absolute; left: 32px; top: 30px; width: 24px; height: 24px; background: #ffc0b8; clip-path: polygon(8px 0, 100% 0, 100% 4px, 8px 4px, 8px 8px, 4px 8px, 4px 100%, 0 100%, 0 8px, 4px 8px, 4px 4px, 8px 4px); }
+.big b { position: absolute; left: 20px; top: 20px; width: 112px; height: 112px; display: flex; align-items: center; justify-content: center;
+  font-family: var(--jp); font-size: 44px; font-weight: normal; color: #ffffff; letter-spacing: 1px; text-shadow: 1px 0 0 #ffffff; pointer-events: none; }
+.big b i { font-style: normal; display: inline-block; transform: translate(-1px, -5px) scale(.78, 1.75); } /* 字形の下寄りを打ち消して、赤い面の中心にそろえる（画素で測定） */
+.big.down .c0 { left: 28px; top: 28px; width: 96px; height: 96px; background: #5e0b08; }
+.big.down .c1 { left: 28px; top: 28px; width: 92px; height: 92px; background: #c22520; }
+.big.down .c2 { left: 36px; top: 36px; width: 76px; height: 76px; background: #d4352c; }
+.big.down .c3 { left: 48px; top: 48px; width: 52px; height: 52px; background: #dc3e34; }
+.big.down .hl { display: none; }
+.big.down b { left: 28px; top: 28px; width: 96px; height: 96px; font-size: 38px; color: #f2dcd8; }
+
+/* ===== D：ダイヤル（表示範囲。昔のテレビのUHFダイヤル：銀の板に黒い丸い溝、溝に目盛り、中央にギザギザのクロームのつまみ） ===== */
+.dial { position: relative; width: 168px; height: 168px; touch-action: none; }
+.dial .plate { position: absolute; inset: 0; background: #c9ccd0; border: 4px solid var(--ink);
+  box-shadow: inset 5px 5px 0 #eef0f2, inset -5px -5px 0 #8d9198;
+  background-image: repeating-linear-gradient(0deg, #ffffff22 0 2px, transparent 2px 4px); }
+.dial .r0 { left: 8px; top: 8px; width: 152px; height: 152px; background: var(--ink); }
+.dial .r1 { left: 12px; top: 12px; width: 144px; height: 144px; background: #2a2a2a; }
+.dial .mark { position: absolute; transform: translate(-50%, -50%); font-family: var(--px); font-size: 8px; white-space: nowrap; cursor: pointer; color: #f4f0e6; padding: 6px 4px; z-index: 1; }
+.dial .mark.dot { width: 4px; height: 4px; padding: 0; background: #f4f0e6; pointer-events: none; }
+.dial .knob { position: absolute; left: 40px; top: 40px; width: 88px; height: 88px; cursor: grab; }
+.dial .knob.play-l { transform: rotate(-2deg); } .dial .knob.play-r { transform: rotate(2deg); }
+.dial .k0 { left: 0; top: 0; width: 88px; height: 88px; background: var(--ink); }
+.dial .k1 { left: 4px; top: 4px; width: 80px; height: 80px; } /* 縁のギザギザ（JSで conic-gradient） */
+.dial .k2 { left: 12px; top: 12px; width: 64px; height: 64px; background: var(--ink); }
+.dial .k3 { left: 16px; top: 16px; width: 56px; height: 56px; background: #d7dadf; }
+.dial .k4 { left: 16px; top: 16px; width: 52px; height: 52px; background: #f2f4f6; }
+.dial .k5 { left: 24px; top: 24px; width: 40px; height: 40px; background: #c3c7cd; }
+.dial .needle i { position: absolute; width: 6px; height: 6px; background: #f4f0e6; box-shadow: 0 0 0 2px var(--ink); }
+
+/* ===== 内容 ===== */
+.pane { background: var(--paper); border: 4px solid var(--ink); box-shadow: 4px 4px 0 #0005; min-height: 420px; }
+.pane > header { background: var(--ink); color: var(--paper); padding: 6px 10px; font-size: 15px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.pane > header small { color: var(--case); font-size: 12px; }
+.graphs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; padding: 14px; }
+.graphs div { height: 220px; border: 3px dashed #1b1b1b40; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+table { width: 100%; border-collapse: collapse; font-size: 15px; }
+th, td { padding: 6px 10px; border-bottom: 2px solid #1b1b1b18; text-align: left; vertical-align: middle; height: 38px; }
+th { font-weight: normal; color: var(--muted); font-size: 13px; height: auto; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.result tr.prj td { background: #1b1b1b0a; }
+.result tr.task td:first-child { padding-left: 34px; }
+.result tr.total td { border-top: 3px solid var(--ink); }
+.result td.num { font-size: 18px; }
+.colhead { display: inline-block; padding: 2px 8px; color: #fff; font-size: 13px; }
+.colhead b { font-family: var(--px); font-size: 9px; margin-right: 6px; font-weight: normal; }
+.c-day { background: var(--orange); } .c-week { background: var(--turq); } .c-month { background: var(--red); }
+
+/* 記録 */
+.recs { position: relative; }
+.recs .row { position: relative; display: grid; grid-template-columns: 110px 70px 70px 1fr 1fr 80px; align-items: center; height: 40px; border-bottom: 2px solid #1b1b1b18; background: var(--paper); touch-action: none; cursor: grab; }
+.recs .row > div { padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.recs .row .num { text-align: right; font-variant-numeric: tabular-nums; }
+.recs .rhead { cursor: default; color: var(--muted); font-size: 13px; height: 30px; }
+.recs .row.notime .t { color: var(--muted); }
+.recs .slide { position: absolute; left: 0; right: 0; top: 0; }
+.recs .wrap { position: relative; overflow: hidden; height: 40px; }
+.recs .delband { position: absolute; left: 0; top: 0; bottom: 0; width: 96px; display: flex; align-items: center; justify-content: center; gap: 6px;
+  background: repeating-linear-gradient(-45deg, var(--red) 0 8px, #c41f1a 8px 16px); color: #fff; font-size: 15px; border-right: 3px solid var(--ink); cursor: pointer; }
+.recs .gap { height: 0; overflow: hidden; background: linear-gradient(90deg, #ffb35c, var(--orange)); transition: height .09s steps(3); border-bottom: 0 solid var(--ink); }
+.recs .gap.open { height: 40px; border-bottom-width: 2px; }
+.recs .gap .hint { display: flex; align-items: center; height: 40px; padding: 0 12px; color: #4a1d00; font-size: 14px; }
+.recs .new { background: linear-gradient(90deg, #ffc98a, #ffb35c); cursor: default; }
+.recs .newbox { position: relative; }
+.recs .newbox.closing { overflow: hidden; transition: height .24s steps(6); }
+.recs .edit { background: #fff0c2; cursor: default; }
+.recs input, .recs select { font-family: var(--jp); font-size: 14px; padding: 2px 4px; border: 2px solid var(--ink); background: #fff; border-radius: 0; max-width: 100%; }
+.recs input.dur { width: 64px; text-align: right; }
+.recs .acts { display: flex; gap: 6px; justify-content: flex-end; padding-right: 8px; }
+/* 入力中の行は1行。時間の右に［保存］［取消］を置く（時間の位置は上下の行と少しずれる） */
+.recs .row.form { grid-template-columns: 110px 70px 70px 1fr 1fr 80px 132px; height: 44px; }
+.recs .new .num, .recs .edit .num { overflow: visible; }
+.guide { padding: 8px 10px; font-size: 13px; color: var(--muted); border-top: 2px solid #1b1b1b18; }
+.guide b { color: var(--ink); font-weight: normal; background: #1b1b1b10; padding: 0 4px; }
+.toast { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); background: var(--ink); color: var(--case); padding: 8px 16px; font-size: 15px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.toast.show { opacity: 1; }
+.hidden { display: none !important; }
+.mocknote { max-width: 1120px; margin: 14px auto 0; color: #cfd0e6; font-size: 13px; line-height: 1.8; }
+</style>
+</head>
+<body>
+<div class="frame" id="frame">
+  <i class="screw tl"></i><i class="screw tr"></i><i class="screw bl"></i><i class="screw br"></i>
+
+  <div class="mocklabel">モック（ダミーデータ）</div>
+  <div class="band">
+    <div class="left">
+      <h1>ANALYSIS</h1>
+      <div class="lever" id="tabLever" style="--w:320px"></div>
+      <div class="nav">
+        <button class="jb" id="navPrev"><span>◀</span></button>
+        <div class="period"><span id="gPeriod" data-for="0">2026年10月</span><span id="rDay" data-for="1"></span><span data-for="2">2026年10月</span></div>
+        <button class="jb" id="navNext"><span>▶</span></button>
+        <button class="jb en" id="rToday" data-for="1"><span>TODAY</span></button>
+      </div>
+    </div>
+    <div class="slot">
+      <div data-for="0" class="span2"><div class="dial" id="dial"></div></div>
+      <div data-for="1"><div class="lever en" id="resLever" style="--w:320px"></div></div>
+      <div data-for="1" class="row2"><button class="jb en" id="rCopy"><span>COPY</span></button></div>
+    </div>
+    <div class="right">
+      <div data-for="0 2"><div class="big" data-csv><i class="pc b0"></i><i class="pc b1"></i><i class="pc b2"></i><i class="pc b3"></i><i class="pc b4"></i><i class="pc c0"></i><i class="pc c1"></i><i class="pc c2"></i><i class="pc c3"></i><i class="hl"></i><b><i>CSV</i></b></div></div>
+    </div>
+  </div>
+
+  <!-- グラフ -->
+  <section data-screen="0">
+    <div class="pane"><header><span>グラフ</span><small>中身は今のまま（モックでは省略）</small></header>
+      <div class="graphs"><div>円グラフ</div><div>折れ線①</div><div>折れ線②</div></div>
+    </div>
+  </section>
+
+  <!-- リザルト -->
+  <section data-screen="1" class="hidden">
+    <div class="pane result"><header><span>リザルト（時間：h:mm）</span><small>コピーは表示中の列だけ</small></header>
+      <table><thead id="rHead"></thead><tbody id="rBody"></tbody></table>
+    </div>
+  </section>
+
+  <!-- 記録 -->
+  <section data-screen="2" class="hidden">
+    <div class="pane"><header><span>記録一覧（この期間・新しい順）</span></header>
+      <div class="recs" id="recs"></div>
+      <div class="guide"><b>下へ引く</b>：つかんだ行の上に追加（その行を上へ戻すと取消）　<b>ダブルクリック</b>：修正　<b>右へ引く</b>：削除　<b>Enter</b>：保存　<b>Esc</b>：取消</div>
+    </div>
+  </section>
+</div>
+<div class="mocknote">
+  モックの確認ポイント：上の切替レバー（クリック／つかんで横へ）、リザルトの 日・週・月・全部 のレバー、◀ ▶ などのオレンジのボタン、赤い CSV ボタン、
+  グラフの表示範囲のダイヤル（目盛りのクリック／つまみを回す）、記録の 下へ引いて追加・ダブルクリックで修正・右へ引いて削除。
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const frame = $("#frame");
+function shake(kind) { frame.classList.remove("thud", "click"); void frame.offsetWidth; frame.classList.add(kind); }
+let toastT;
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), 1400); }
+// 階段状の円（4pxのドット）を clip-path にする
+function pixelCircle(size) {
+  const n = size / 4, r = n / 2, right = [], left = [];
+  for (let i = 0; i < n; i++) {
+    // 奇数マスのときも端が4pxの格子にそろうよう、半幅を「整数＋0.5」にする
+    const y = i + 0.5 - r, odd = (n % 2) / 2, half = Math.max(odd, Math.round(Math.sqrt(Math.max(0, r * r - y * y)) - odd) + odd);
+    right.push(`${(r + half) * 4}px ${i * 4}px`, `${(r + half) * 4}px ${(i + 1) * 4}px`);
+    left.unshift(`${(r - half) * 4}px ${(i + 1) * 4}px`, `${(r - half) * 4}px ${i * 4}px`);
+  }
+  return `polygon(${right.concat(left).join(",")})`;
+}
+function applyPixelCircles(root = document) { root.querySelectorAll(".pc").forEach(el => { el.style.clipPath = pixelCircle(parseInt(getComputedStyle(el).width)); }); }
+function noNativeDrag(el) { el.addEventListener("dragstart", e => e.preventDefault()); }
+
+// ===== A：切替レバー =====
+// マウスの位置（つかんだ時のレバー位置＋動かした量）を常に基準にする。
+// 今の位置から GATE_RATIO（間隔に対する割合）以上離れたら、その向きの隣へ「カチッ」と移る。
+// それ以内なら LEVER_PLAY_PX までは 1px だけガタつき、その先は止まる。
+// 0.5より大きくしておけば、移った直後に戻り側の判定に入らない（行ったり来たりしない）。
+const LEVER_PLAY_PX = 6, LEVER_PLAY = 1, GATE_RATIO = 0.55;
+function makeLever(el, labels, index, onChange) {
+  const w = el.offsetWidth, pad = 40, step = (w - pad * 2) / (labels.length - 1);
+  const xs = labels.map((_, i) => pad + step * i);
+  el.innerHTML = `<div class="labels">${labels.map((l, i) => `<span style="left:${xs[i]}px">${l}</span>`).join("")}</div>
+    <div class="slot"></div><div class="knob snap"></div>`;
+  const knob = el.querySelector(".knob"), spans = [...el.querySelectorAll(".labels span")];
+  let idx = index, drag = null;
+  const place = off => { knob.style.left = (xs[idx] + off) + "px"; };
+  const go = i => {
+    if (i === idx || i < 0 || i >= labels.length) return false;
+    idx = i; knob.classList.add("snap"); place(0); shake("click"); onChange(idx); return true;
+  };
+  spans.forEach((s, i) => s.addEventListener("click", () => go(i)));
+  noNativeDrag(knob);
+  knob.addEventListener("pointerdown", e => {
+    e.preventDefault(); knob.setPointerCapture?.(e.pointerId);
+    drag = { x0: e.clientX, from: xs[idx] };
+  });
+  knob.addEventListener("pointermove", e => {
+    if (!drag) return;
+    const pos = drag.from + (e.clientX - drag.x0);
+    let d = pos - xs[idx];
+    if (Math.abs(d) >= step * GATE_RATIO) {
+      // 速く動かして2つ先まで来ていれば、一気にそこまで移る
+      const target = clamp(Math.round((pos - pad) / step), 0, labels.length - 1);
+      if (go(target === idx ? idx + Math.sign(d) : target)) return;
+    }
+    knob.classList.remove("snap");
+    place(clamp(d, -LEVER_PLAY_PX, LEVER_PLAY_PX) / LEVER_PLAY_PX * LEVER_PLAY);
+  });
+  const end = () => { if (!drag) return; drag = null; knob.classList.add("snap"); place(0); };
+  knob.addEventListener("pointerup", end); knob.addEventListener("lostpointercapture", end);
+  place(0);
+  return go;
+}
+
+// ===== B：ジュークボックスボタン（押すたびにランプが光る） =====
+document.addEventListener("pointerdown", e => {
+  const b = e.target.closest(".jb"); if (!b || b.disabled) return;
+  b.classList.remove("flash"); void b.offsetWidth; b.classList.add("flash");
+});
+
+// 画面を切り替えたとき、その画面のボタンを一度光らせる
+function flashAll(root) { root.querySelectorAll(".jb").forEach(b => { if (!b.offsetParent || getComputedStyle(b).visibility === "hidden") return; b.classList.remove("flash"); void b.offsetWidth; b.classList.add("flash"); }); }
+
+// ===== C：赤い丸ボタン =====
+// 押したら最低 BIG_HOLD_MS はへこんだままにする（ぽちっと押しても沈んだのが見えるように）
+const BIG_HOLD_MS = 600;
+document.querySelectorAll("[data-csv]").forEach(b => {
+  let downAt = 0, timer = null;
+  b.addEventListener("pointerdown", e => {
+    e.preventDefault(); clearTimeout(timer); downAt = performance.now(); b.classList.add("down"); applyPixelCircles(b); shake("thud");
+    toast("CSVを保存しました（モック）");
+  });
+  const up = () => {
+    if (!b.classList.contains("down")) return;
+    timer = setTimeout(() => { b.classList.remove("down"); applyPixelCircles(b); }, Math.max(0, BIG_HOLD_MS - (performance.now() - downAt)));
+  };
+  b.addEventListener("pointerup", up); b.addEventListener("pointerleave", up);
+});
+
+// ===== D：ダイヤル =====
+// 8時（WK）〜4時（ALL）に6つの目盛り。切替レバーと同じく、つかんだ時の角度＋回した量（マウスの位置そのもの）で判定する：
+// 今の目盛りから DIAL_PLAY_DEG まではガタつくだけ、その先は止まり、間隔の DIAL_GATE_RATIO 回すと「カチッ」と入る。
+const RANGES = ["WK", "MO", "3MO", "6MO", "YR", "ALL"];
+const DIAL_STEP = 48, DIAL_ANG = RANGES.map((_, i) => -120 + i * DIAL_STEP), DIAL_PLAY_DEG = 8, DIAL_GATE_RATIO = 0.6;
+(function makeDial(el) {
+  const c = 84, R = 58;
+  const at = (deg, r) => { const a = deg * Math.PI / 180; return `left:${c + Math.sin(a) * r}px;top:${c - Math.cos(a) * r}px`; };
+  el.innerHTML = `<div class="plate"></div><i class="pc r0"></i><i class="pc r1"></i>`
+    + RANGES.map((r, i) => `<span class="mark" style="${at(DIAL_ANG[i], R)}">${r}</span>`).join("")
+    + DIAL_ANG.slice(1).map(a => `<span class="mark dot" style="${at(a - DIAL_STEP / 2, R + 4)}"></span>`).join("")
+    + `<div class="knob"><i class="pc k0"></i><i class="pc k1"></i><i class="pc k2"></i><i class="pc k3"></i><i class="pc k4"></i><i class="pc k5"></i><div class="needle"></div></div>`;
+  el.querySelector(".k1").style.background = "repeating-conic-gradient(#f2f4f6 0 7.5deg, #7d838c 7.5deg 15deg)";
+  const knob = el.querySelector(".knob"), needle = el.querySelector(".needle"), marks = [...el.querySelectorAll(".mark:not(.dot)")];
+  let idx = 1, drag = null;
+  // 目印：つまみの中ほどから縁まで、ドットを2px刻みの格子にそろえて並べる
+  const set = () => {
+    const a = DIAL_ANG[idx] * Math.PI / 180, dots = new Set();
+    for (let r = 14; r <= 38; r += 4) dots.add(`${Math.round((44 + Math.sin(a) * r - 3) / 2) * 2},${Math.round((44 - Math.cos(a) * r - 3) / 2) * 2}`);
+    needle.innerHTML = [...dots].map(d => { const [x, y] = d.split(","); return `<i style="left:${x}px;top:${y}px"></i>`; }).join("");
+  };
+  const go = i => {
+    if (i === idx || i < 0 || i >= RANGES.length) return false;
+    idx = i; set(); shake("click");
+    $("#gPeriod").textContent = { 0: "10/19〜10/25", 1: "2026年10月", 2: "2026年8月〜10月", 3: "2026年5月〜10月", 4: "2025年11月〜2026年10月", 5: "これまでの累積" }[idx];
+    return true;
+  };
+  marks.forEach((m, i) => m.addEventListener("click", () => go(i)));
+  noNativeDrag(knob);
+  const center = () => { const r = el.getBoundingClientRect(); return [r.left + c, r.top + c]; };
+  const angleOf = e => { const [x, y] = center(); return Math.atan2(e.clientX - x, -(e.clientY - y)) * 180 / Math.PI; };
+  const wrap = d => ((d + 540) % 360) - 180;
+  knob.addEventListener("pointerdown", e => {
+    e.preventDefault(); knob.setPointerCapture?.(e.pointerId);
+    drag = { a0: angleOf(e), from: DIAL_ANG[idx], last: angleOf(e), turned: 0 };
+  });
+  knob.addEventListener("pointermove", e => {
+    if (!drag) return;
+    const a = angleOf(e);
+    drag.turned += wrap(a - drag.last); drag.last = a; // 一周をまたいでも続けて数える
+    const pos = drag.from + drag.turned, d = pos - DIAL_ANG[idx];
+    if (Math.abs(d) >= DIAL_STEP * DIAL_GATE_RATIO) {
+      const target = clamp(Math.round((pos - DIAL_ANG[0]) / DIAL_STEP), 0, RANGES.length - 1);
+      if (go(target === idx ? idx + Math.sign(d) : target)) { knob.classList.remove("play-l", "play-r"); return; }
+    }
+    knob.classList.toggle("play-l", d <= -DIAL_PLAY_DEG / 2); knob.classList.toggle("play-r", d >= DIAL_PLAY_DEG / 2);
+  });
+  const end = () => { drag = null; knob.classList.remove("play-l", "play-r"); };
+  knob.addEventListener("pointerup", end); knob.addEventListener("lostpointercapture", end);
+  set();
+})($("#dial"));
+applyPixelCircles();
+
+// ===== 画面切替 =====
+let screen = 0;
+function showScreen(i) {
+  screen = i;
+  document.querySelectorAll("[data-screen]").forEach(s => s.classList.toggle("hidden", +s.dataset.screen !== i));
+  document.querySelectorAll(".band [data-for]").forEach(el => el.classList.toggle("off", !el.dataset.for.split(" ").includes(String(i))));
+}
+const goTab = makeLever($("#tabLever"), ["グラフ", "リザルト", "記録"], 0, i => {
+  showScreen(i);
+  flashAll(document);
+  if (i === 1 && !resLeverMade) { makeLever($("#resLever"), ["DAY", "WEEK", "MONTH", "ALL"], resCol, c => { resCol = c; renderResult(); }); resLeverMade = true; }
+  if (i === 2) renderRecs();
+});
+showScreen(0);
+$("#navPrev").onclick = () => screen === 1 ? moveDay(-1) : toast("前の期間（モック）");
+$("#navNext").onclick = () => screen === 1 ? moveDay(1) : toast("次の期間（モック）");
+
+// ===== リザルト（ダミー：秒単位） =====
+const hm = sec => { if (!sec) return ""; const m = Math.round(sec / 60); return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`; };
+const WD = "日月火水木金土";
+let resCol = 0, resLeverMade = false, resDay = new Date(2026, 9, 20);
+const RES = [ // [プロジェクト, タスク, 日, 週, 月]（秒）
+  ["プロジェクトA", "設計", 9300, 30100, 101000], ["プロジェクトA", "レビュー", 2690, 9020, 40210],
+  ["プロジェクトB", "打合せ", 3610, 7200, 21700], ["プロジェクトB", "資料作成", 0, 5400, 33320],
+];
+function periodLabels(d) {
+  const mon = new Date(d); mon.setDate(d.getDate() - (d.getDay() + 6) % 7);
+  const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+  const md = x => `${x.getMonth() + 1}/${x.getDate()}`;
+  return [`${md(d)}(${WD[d.getDay()]})`, `${md(mon)}〜${md(sun)}`, `${d.getFullYear()}年${d.getMonth() + 1}月`];
+}
+function renderResult() {
+  const lbl = periodLabels(resDay), names = ["DAY", "WEEK", "MONTH"], cls = ["c-day", "c-week", "c-month"];
+  const cols = resCol === 3 ? [0, 1, 2] : [resCol];
+  $("#rDay").textContent = `基準日 ${lbl[0]}`;
+  $("#rHead").innerHTML = `<tr><th>プロジェクト／タスク</th>${cols.map(c => `<th class="num"><span class="colhead ${cls[c]}"><b>${names[c]}</b>${lbl[c]}</span></th>`).join("")}</tr>`;
+  let h = "", prev = null;
+  const sum = (rows, c) => rows.reduce((a, r) => a + r[2 + c], 0);
+  for (const r of RES) {
+    if (r[0] !== prev) { prev = r[0]; const rows = RES.filter(x => x[0] === r[0]); h += `<tr class="prj"><td>${r[0]}</td>${cols.map(c => `<td class="num">${hm(sum(rows, c))}</td>`).join("")}</tr>`; }
+    h += `<tr class="task"><td>${r[1]}</td>${cols.map(c => `<td class="num">${hm(r[2 + c])}</td>`).join("")}</tr>`;
+  }
+  h += `<tr class="total"><td>合計</td>${cols.map(c => `<td class="num">${hm(sum(RES, c))}</td>`).join("")}</tr>`;
+  $("#rBody").innerHTML = h;
+}
+const moveDay = n => { resDay = new Date(resDay); resDay.setDate(resDay.getDate() + n); renderResult(); };
+$("#rToday").onclick = () => { resDay = new Date(2026, 9, 20); renderResult(); };
+$("#rCopy").onclick = () => toast("表示中の列をコピーしました（モック）");
+renderResult();
+// 確認用：URLの #1 / #2 でリザルト／記録から開く
+if (/^#[12]$/.test(location.hash)) setTimeout(() => goTab(+location.hash[1]), 0);
+
+// ===== 記録（ダミー） =====
+const PRJ = { "プロジェクトA": ["設計", "レビュー"], "プロジェクトB": ["打合せ", "資料作成"] };
+let recs = [
+  { d: "2026-10-20", s: "13:05", e: "15:40", p: "プロジェクトA", t: "設計" },
+  { d: "2026-10-20", s: "09:30", e: "12:00", p: "プロジェクトB", t: "打合せ" },
+  { d: "2026-10-19", s: "16:10", e: "18:00", p: "プロジェクトA", t: "レビュー" },
+  { d: "2026-10-19", s: "10:00", e: "12:30", p: "プロジェクトA", t: "設計" },
+  { d: "2026-10-16", s: "13:30", e: "17:30", p: "プロジェクトB", t: "資料作成" },
+  { d: "2026-10-01", s: "09:21", e: "18:48", p: "プロジェクトA", t: "設計" },
+];
+const toMin = t => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
+const durOf = r => r.dur != null ? r.dur : toMin(r.e) - toMin(r.s);
+const fmtDur = m => `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`;
+const dLabel = iso => { const x = new Date(iso + "T00:00"); return `${x.getMonth() + 1}/${x.getDate()}(${WD[x.getDay()]})`; };
+const isoAdd = (iso, n) => { const x = new Date(iso + "T00:00"); x.setDate(x.getDate() + n); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`; };
+const TODAY = "2026-10-20";
+let editing = null; // {kind:"new", at, dates} | {kind:"edit", i}
+
+// 追加する行の日付の選択肢：下側（つかんだ行＝古い方）の日付から最大14日分、上側の日付まで
+function dateChoices(lowerIso, upperIso) {
+  const out = [], last = upperIso || TODAY;
+  for (let i = 0; i < 14; i++) { const d = isoAdd(lowerIso, i); if (d > last) break; out.push(d); }
+  return out;
+}
+const opts = (list, sel, f = x => x) => list.map(x => `<option value="${x}" ${x === sel ? "selected" : ""}>${f(x)}</option>`).join("");
+
+function rowHtml(r, i) {
+  const notime = r.dur != null;
+  return `<div class="wrap" data-i="${i}"><div class="delband" data-del="${i}">✕ 削除</div>
+    <div class="row slide ${notime ? "notime" : ""}" data-i="${i}">
+      <div>${dLabel(r.d)}</div><div class="t">${notime ? "--:--" : r.s}</div><div class="t">${notime ? "--:--" : r.e}</div>
+      <div>${r.p}</div><div>${r.t}</div><div class="num">${fmtDur(durOf(r))}</div></div></div>`;
+}
+function inputRow(kind, r, dates) {
+  const p = r.p || Object.keys(PRJ)[0], notime = kind === "new" || r.dur != null;
+  const date = dates.length > 1 ? `<select id="fD">${opts(dates, dates[0], dLabel)}</select>` : `<span id="fD" data-v="${dates[0]}">${dLabel(dates[0])}</span>`;
+  const times = notime ? `<div class="t">--:--</div><div class="t">--:--</div>`
+    : `<div><input id="fS" value="${r.s}" size="5"></div><div><input id="fE" value="${r.e}" size="5"></div>`;
+  return `${kind === "new" ? `<div class="newbox">` : ""}<div class="row form ${kind === "new" ? "new" : "edit"}">
+    <div>${date}</div>${times}
+    <div><select id="fP">${opts(Object.keys(PRJ), p)}</select></div>
+    <div><select id="fT">${opts(PRJ[p], r.t)}</select></div>
+    <div class="num">${notime ? `<input class="dur" id="fDur" inputmode="numeric" value="${r.dur != null ? fmtDur(r.dur) : "_:__"}" data-digits="${r.dur != null ? String(Math.floor(r.dur / 60)) + String(r.dur % 60).padStart(2, "0") : ""}">` : ""}</div>
+    <div class="acts"><button class="jb small" id="fOk"><span>保存</span></button><button class="jb small" id="fNg"><span>取消</span></button></div>
+    </div>${kind === "new" ? "</div>" : ""}`;
+}
+function renderRecs() {
+  const box = $("#recs");
+  let h = `<div class="row rhead"><div>日付</div><div>開始</div><div>終了</div><div>プロジェクト</div><div>タスク</div><div class="num">時間</div></div>`;
+  recs.forEach((r, i) => {
+    if (editing?.kind === "new" && editing.at === i) h += inputRow("new", {}, editing.dates);
+    else h += `<div class="gap" data-gap="${i}"><div class="hint">＋ ここに追加（離すと入力）</div></div>`;
+    h += editing?.kind === "edit" && editing.i === i ? inputRow("edit", r, [r.d]) : rowHtml(r, i);
+  });
+  box.innerHTML = h;
+  newCtl = null;
+  if (editing) bindForm();
+  box.querySelectorAll(".slide").forEach(bindRow);
+  box.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", () => {
+    recs.splice(+b.dataset.del, 1); editing = null; renderRecs(); shake("thud"); toast("削除しました（モック）");
+  }));
+}
+// 時間の入力：数字の並びを「時間」「分」に分ける。3桁までは 時:分分、4桁は 時時:分分。分の足りない桁は0とみなす。
+function durParts(d) {
+  if (!d) return [0, 0];
+  const hl = d.length === 4 ? 2 : 1;
+  return [+d.slice(0, hl), +(d.slice(hl) + "00").slice(0, 2)];
+}
+function durText(d) {
+  if (!d) return "_:__";
+  const hl = d.length === 4 ? 2 : 1;
+  return `${d.slice(0, hl)}:${(d.slice(hl) + "__").slice(0, 2)}`;
+}
+// カーソルより前にある数字の枠（「:」以外）の数
+function slotsBefore(text, caret) { return [...text.slice(0, caret)].filter(c => c !== ":").length; }
+// n 個目の数字の枠の直後の位置（すぐ後ろが「:」なら、その後ろ）
+function caretAt(text, n) {
+  let pos = 0, count = 0;
+  while (pos < text.length && count < n) { if (text[pos] !== ":") count++; pos++; }
+  if (n > 0 && text[pos] === ":") pos++;
+  return pos;
+}
+function bindForm() {
+  const p = $("#fP"), t = $("#fT");
+  p.onchange = () => { t.innerHTML = opts(PRJ[p.value], ""); };
+  const cancel = () => { editing = null; renderRecs(); };
+  $("#fNg").onclick = cancel;
+  document.onkeydown = e => { if (e.key === "Escape" && editing) cancel(); };
+  $("#fOk").onclick = () => {
+    const dEl = $("#fD"), d = dEl.tagName === "SELECT" ? dEl.value : dEl.dataset.v;
+    const rec = { d, p: p.value, t: t.value };
+    if ($("#fDur")) {
+      const [h, mm] = durParts($("#fDur").dataset.digits), mins = h * 60 + mm;
+      if (!mins || mm > 59 || mins >= 24 * 60) { toast(mm > 59 ? "分は 59 までです" : "作業時間を入れてください"); return; }
+      rec.dur = mins;
+    } else { rec.s = $("#fS").value; rec.e = $("#fE").value; }
+    if (editing.kind === "edit") recs[editing.i] = rec; else recs.splice(editing.at, 0, rec);
+    recs.sort((a, b) => (b.d + (b.s || "")).localeCompare(a.d + (a.s || "")));
+    editing = null; renderRecs(); toast("保存しました（モック）");
+  };
+  // 時間の欄に値があってカーソルがそこにあるとき、Enter で保存
+  const dur = $("#fDur");
+  // 「:」は最初から置いておき、数字は左から 時間 → 分 の順に入る（1 → 1:__、13 → 1:3_、130 → 1:30）。3桁まで（10時間以上の作業はまず無いため）
+  // ←→・Home・End でカーソルを動かせる。数字はカーソルの位置の数字を上書きし（末尾なら追加）、Backspace／Delete はカーソルの前／後ろの数字を消す。
+  dur?.addEventListener("keydown", e => {
+    let d = dur.dataset.digits;
+    if (e.key === "Enter") { e.preventDefault(); if (d) $("#fOk").click(); return; }
+    if (["ArrowLeft", "ArrowRight", "Home", "End", "Tab", "Escape"].includes(e.key)) return;
+    e.preventDefault();
+    const at = Math.min(d.length, slotsBefore(dur.value, dur.selectionStart));
+    let next = at;
+    if (/^\d$/.test(e.key)) {
+      if (at < d.length) { d = d.slice(0, at) + e.key + d.slice(at + 1); next = at + 1; }
+      else if (d.length < 3) { d += e.key; next = at + 1; }
+    } else if (e.key === "Backspace") { if (at > 0) { d = d.slice(0, at - 1) + d.slice(at); next = at - 1; } }
+    else if (e.key === "Delete") d = d.slice(0, at) + d.slice(at + 1);
+    else return;
+    dur.dataset.digits = d;
+    dur.value = durText(d);
+    const pos = caretAt(dur.value, next);
+    dur.setSelectionRange(pos, pos);
+  });
+  if (!dur) ["#fS", "#fE"].forEach(id => $(id)?.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); $("#fOk").click(); } }));
+  bindNewBox(cancel);
+  dur?.focus();
+}
+// なめらかに追従させる：目標値へ毎フレーム SMOOTH の割合ずつ近づける（マウスの細かい揺れを吸収して、ふすまのように動く）。
+// 表示は整数pxに丸めて、小刻みに揺れないようにする。
+const SMOOTH = 0.35;
+function smoother(apply, initial = 0) {
+  let cur = initial, target = initial, raf = 0, done = null;
+  const tick = () => {
+    cur += (target - cur) * SMOOTH;
+    if (Math.abs(target - cur) < 0.5) cur = target;
+    apply(Math.round(cur));
+    if (cur === target) { raf = 0; const f = done; done = null; f?.(); } else raf = requestAnimationFrame(tick);
+  };
+  return {
+    to(v, onDone) { target = v; done = onDone || null; if (!raf) raf = requestAnimationFrame(tick); },
+    get value() { return cur; },
+  };
+}
+// 引き下げて開いた追加行は、その下の行（引き下げた行）をつかんで上へ戻すと、マウスに合わせて縮む。
+// 半分より上で離すと閉じて取消、それ以外は元の高さに戻る。
+let newCtl = null;
+function bindNewBox(cancel) {
+  const box = document.querySelector(".newbox");
+  if (!box) return;
+  const full = box.offsetHeight;
+  const sm = smoother(v => { box.style.height = v + "px"; }, full);
+  let y0 = null, h = full;
+  box.style.overflow = "hidden";
+  newCtl = {
+    start(y) { y0 = y; h = full; },
+    move(y) { if (y0 === null) return; h = clamp(full + (y - y0), 0, full); sm.to(h); },
+    end() {
+      if (y0 === null) return;
+      y0 = null;
+      // 判定はマウスの位置で行う（表示は少し遅れて追いかけるため）
+      if (h < full / 2) sm.to(0, cancel);
+      else sm.to(full, () => { box.style.height = ""; });
+    },
+  };
+}
+// 行のドラッグ：最初に動いた向きで「下＝追加」「右＝削除」を決める。
+// 追加（下）は あそび → 止まる → 一気に開く。削除（右）はマウスになめらかに追従し、半分より右で離すと開いたまま止まる。
+const ROW_PLAY_PX = 6, ROW_PLAY = 1, ADD_GATE = 28, ADD_BACK = 14, DEL_OPEN = 96;
+let openDel = null;
+function closeDel() { if (openDel) { openDel._sm.to(0); openDel = null; } }
+function bindRow(row) {
+  const i = +row.dataset.i, gap = $(`[data-gap="${i}"]`);
+  let drag = null;
+  row._sm = smoother(v => { row.style.transition = "none"; row.style.transform = v ? `translateX(${v}px)` : ""; });
+  noNativeDrag(row);
+  row.addEventListener("dblclick", () => { closeDel(); editing = { kind: "edit", i }; renderRecs(); });
+  row.addEventListener("pointerdown", e => {
+    if (e.button !== 0) return;
+    if (editing) {
+      if (editing.kind !== "new" || editing.at !== i || !newCtl) return;
+      e.preventDefault(); row.setPointerCapture?.(e.pointerId);
+      drag = { closing: true }; newCtl.start(e.clientY); return;
+    }
+    if (openDel && openDel !== row) closeDel();
+    e.preventDefault(); row.setPointerCapture?.(e.pointerId);
+    drag = { x0: e.clientX, y0: e.clientY, axis: openDel === row ? "x" : null, startX: openDel === row ? DEL_OPEN : 0, open: false };
+    row.style.transition = "none";
+  });
+  row.addEventListener("pointermove", e => {
+    if (!drag) return;
+    if (drag.closing) { newCtl?.move(e.clientY); return; }
+    const dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
+    if (!drag.axis && Math.hypot(dx, dy) >= ROW_PLAY_PX) drag.axis = dy > Math.abs(dx) ? "y" : dx > 0 ? "x" : null;
+    const play = v => clamp(v, -ROW_PLAY_PX, ROW_PLAY_PX) / ROW_PLAY_PX * ROW_PLAY;
+    if (drag.axis === "y") {
+      if (!drag.open && dy >= ADD_GATE) { drag.open = true; gap.classList.add("open"); shake("thud"); }
+      else if (drag.open && dy < ADD_BACK) { drag.open = false; gap.classList.remove("open"); }
+      row.style.transform = `translateY(${drag.open ? 0 : play(dy)}px)`;
+    } else if (drag.axis === "x") {
+      row.style.transition = "none";
+      drag.tx = clamp(drag.startX + dx, 0, DEL_OPEN);
+      row._sm.to(drag.tx);
+    } else row.style.transform = `translate(${play(dx)}px, ${play(dy)}px)`;
+  });
+  const end = () => {
+    if (!drag) return;
+    const d = drag; drag = null;
+    if (d.closing) { newCtl?.end(); return; }
+    row.style.transition = "transform .15s cubic-bezier(.3,1.6,.55,1)";
+    if (d.axis === "y" && d.open) {
+      const upper = recs[i - 1]?.d;
+      editing = { kind: "new", at: i, dates: dateChoices(recs[i].d, upper) };
+      renderRecs(); return;
+    }
+    if (d.axis === "x") {
+      const open = (d.tx ?? d.startX) >= DEL_OPEN / 2;
+      row._sm.to(open ? DEL_OPEN : 0); openDel = open ? row : openDel === row ? null : openDel; return;
+    }
+    row.style.transform = ""; if (openDel === row) openDel = null;
+  };
+  row.addEventListener("pointerup", end); row.addEventListener("lostpointercapture", end);
+}
+</script>
+</body>
+</html>
