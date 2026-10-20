@@ -47,7 +47,7 @@
   - 枠なしウィンドウの移動は、要素に `pywebview-drag-region` クラスを付ける
   - js_apiに渡すクラスの属性は `_` 始まりにする（公開属性はJS側へ再帰的に公開されるため）
 - グローバルショートカットは `RegisterHotKey`（ctypes）で実装。pynputのGlobalHotKeysはShift付きの数字が「!」等になって一致しないため使わない。キー入力を監視しないので、他アプリの入力を覗かない点でも安全
-- 動作確認の方法：環境変数 `CASE_TIMER_DATA_DIR` でテスト用フォルダを指定し、アプリを起動して `evaluate_js` で画面を操作し、`PIL.ImageGrab` でウィンドウを撮る（スクリプトの例は作業時のscratchpadにあった `e2e.py`）。`keybd_event` で本物のショートカットも送れる
+- 動作確認の方法：環境変数 `CASE_TIMER_DATA_DIR` でテスト用フォルダを指定し、アプリを起動して `evaluate_js` で画面を操作し、`PIL.ImageGrab` でウィンドウを撮る（v1.2 以降のスクリプトは `tests/e2e/` にある：`seed_dummy.py` でダミーデータ、`analysis_screens.py`・`record_edit_input.py` で分析画面を自動操作）。`keybd_event` で本物のショートカットも送れる
 - SQLiteはOneDrive上に置くため、WALモード（-wal/-shmの別ファイル）は使っていない
 - 分析画面の色は「その期間で多い順」に割り当てる。プロジェクト数が8を超えても同じ画面の中で色が重ならないようにするため（期間を変えると色が変わることはある）
 
